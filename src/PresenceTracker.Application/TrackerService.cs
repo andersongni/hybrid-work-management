@@ -23,9 +23,7 @@ public enum BatchAction
     DayOff,
     Holiday,
     NonWorkingDay,
-    RemovePlan,
-    RemoveClassification,
-    RemoveManualPresence
+    RestoreDefaults
 }
 
 public interface ITrackerRepository
@@ -34,7 +32,10 @@ public interface ITrackerRepository
     Task<TrackerMonthData> LoadMonthAsync(int year, int month, CancellationToken cancellationToken = default);
     Task ApplyBatchAsync(IReadOnlyCollection<DateOnly> dates, BatchAction action, CancellationToken cancellationToken = default);
     Task SetAttendanceStatusAsync(long attendanceId, AttendanceStatus status, CancellationToken cancellationToken = default);
-    Task<TrackerSettings> UpdateSettingsAsync(TrackerSettings settings, IReadOnlyCollection<PresenceNetwork> networks, CancellationToken cancellationToken = default);
+    Task<TrackerSettings> UpdateSettingsAsync(TrackerSettings settings, IReadOnlyCollection<PresenceNetwork> networks,
+        CancellationToken cancellationToken = default, IReadOnlyCollection<int>? removedNetworkIds = null);
+    Task RefreshAfterRestoreAsync(CancellationToken cancellationToken = default);
+    Task ResetToFactoryDefaultsAsync(CancellationToken cancellationToken = default);
     Task RegisterNetworkChangeAsync(NetworkChange change, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Holiday>> GetHolidaysAsync(int year, CancellationToken cancellationToken = default);
     Task SaveHolidayAsync(Holiday holiday, CancellationToken cancellationToken = default);
@@ -79,7 +80,8 @@ public sealed class TrackerService(ITrackerRepository repository, PresenceCalcul
     public Task SetAttendanceStatusAsync(long id, AttendanceStatus status, CancellationToken cancellationToken = default) =>
         repository.SetAttendanceStatusAsync(id, status, cancellationToken);
 
-    public Task<TrackerSettings> UpdateSettingsAsync(TrackerSettings settings, IReadOnlyCollection<PresenceNetwork> networks, CancellationToken cancellationToken = default)
+    public Task<TrackerSettings> UpdateSettingsAsync(TrackerSettings settings, IReadOnlyCollection<PresenceNetwork> networks,
+        CancellationToken cancellationToken = default, IReadOnlyCollection<int>? removedNetworkIds = null)
     {
         PresenceCalculator.ValidateTarget(settings.TargetPercent);
         if (networks.Any(n => string.IsNullOrWhiteSpace(n.Ssid) || System.Text.Encoding.UTF8.GetByteCount(n.Ssid.Trim()) > 32))
@@ -88,8 +90,16 @@ public sealed class TrackerService(ITrackerRepository repository, PresenceCalcul
             throw new ArgumentException("Os SSIDs devem ser únicos.", nameof(networks));
         if (settings.BackupRetentionCount is < 1 or > 365)
             throw new ArgumentOutOfRangeException(nameof(settings.BackupRetentionCount), "A retenção deve ficar entre 1 e 365 backups.");
-        return repository.UpdateSettingsAsync(settings, networks, cancellationToken);
+        if (settings.BackupIntervalHours is < 1 or > 720)
+            throw new ArgumentOutOfRangeException(nameof(settings.BackupIntervalHours), "O intervalo deve ficar entre 1 e 720 horas.");
+        return repository.UpdateSettingsAsync(settings, networks, cancellationToken, removedNetworkIds);
     }
+
+    public Task RefreshAfterRestoreAsync(CancellationToken cancellationToken = default) =>
+        repository.RefreshAfterRestoreAsync(cancellationToken);
+
+    public Task ResetToFactoryDefaultsAsync(CancellationToken cancellationToken = default) =>
+        repository.ResetToFactoryDefaultsAsync(cancellationToken);
 
     public Task RegisterNetworkChangeAsync(NetworkChange change, CancellationToken cancellationToken = default) =>
         repository.RegisterNetworkChangeAsync(change, cancellationToken);

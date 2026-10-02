@@ -6,6 +6,7 @@ namespace PresenceTracker.NetworkMonitoring;
 
 public sealed record WlanNetworkTransition(DateTimeOffset OccurredAt, string InterfaceId,
     string InterfaceName, string? Ssid, NetworkEventType Type);
+public sealed record WlanCurrentConnection(string InterfaceId, string InterfaceName, string Ssid);
 
 public sealed class WlanMonitor : IDisposable
 {
@@ -16,6 +17,7 @@ public sealed class WlanMonitor : IDisposable
     private const int CurrentConnectionOpcode = 7;
     private readonly object gate = new();
     private readonly Dictionary<Guid, string> connectedSsids = [];
+    private readonly Dictionary<Guid, string> reportedSsids = [];
     private readonly Dictionary<Guid, (DateOnly Date, string Ssid)> presenceObserved = [];
     private readonly WlanNotificationCallback callback;
     private IntPtr clientHandle;
@@ -53,6 +55,62 @@ public sealed class WlanMonitor : IDisposable
 
     public int MarkCurrentConnectionsForNetworks(IEnumerable<string> ssids)
         => CaptureCurrentConnections(ssids, force: true, emitTransition: false);
+
+    public IReadOnlyList<WlanCurrentConnection> GetCurrentConnections()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (clientHandle == IntPtr.Zero) return [];
+        return GetInterfaces()
+            .Select(item => (Interface: item, Ssid: QuerySsid(item.Guid)))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Ssid))
+            .Select(item => new WlanCurrentConnection(item.Interface.Guid.ToString("D"),
+                item.Interface.Description ?? "Wi-Fi", item.Ssid!))
+            .ToArray();
+    }
+
+    public int ObserveCurrentConnections()
+    {
+        var observedAt = DateTimeOffset.Now;
+        var transitions = new List<WlanNetworkTransition>();
+        foreach (var item in GetInterfaces())
+        {
+            var current = QuerySsid(item.Guid);
+            string? previous;
+            bool report;
+            lock (gate)
+            {
+                connectedSsids.TryGetValue(item.Guid, out previous);
+                if (current is null)
+                {
+                    if (previous is not null && reportedSsids.ContainsKey(item.Guid))
+                        transitions.Add(new WlanNetworkTransition(observedAt, item.Guid.ToString("D"),
+                            item.Description ?? "Wi-Fi", previous, NetworkEventType.Disconnected));
+                    connectedSsids.Remove(item.Guid);
+                    reportedSsids.Remove(item.Guid);
+                    continue;
+                }
+
+                if (previous is not null && !string.Equals(previous, current, StringComparison.OrdinalIgnoreCase) &&
+                    reportedSsids.ContainsKey(item.Guid))
+                    transitions.Add(new WlanNetworkTransition(observedAt, item.Guid.ToString("D"),
+                        item.Description ?? "Wi-Fi", previous, NetworkEventType.Disconnected));
+                connectedSsids[item.Guid] = current;
+                report = !reportedSsids.TryGetValue(item.Guid, out var reported) ||
+                    !string.Equals(reported, current, StringComparison.OrdinalIgnoreCase);
+                reportedSsids[item.Guid] = current;
+                if (report)
+                    presenceObserved[item.Guid] = (DateOnly.FromDateTime(observedAt.LocalDateTime), current);
+            }
+
+            if (report)
+                transitions.Add(new WlanNetworkTransition(observedAt, item.Guid.ToString("D"),
+                    item.Description ?? "Wi-Fi", current, NetworkEventType.Connected));
+        }
+
+        foreach (var transition in transitions)
+            NetworkChanged?.Invoke(transition);
+        return transitions.Count;
+    }
 
     private int CaptureCurrentConnections(IEnumerable<string> ssids, bool force, bool emitTransition)
     {
@@ -126,6 +184,7 @@ public sealed class WlanMonitor : IDisposable
                 {
                     connectedSsids.TryGetValue(notification.InterfaceGuid, out previous);
                     connectedSsids[notification.InterfaceGuid] = fromPayload;
+                    reportedSsids[notification.InterfaceGuid] = fromPayload;
                 }
                 if (!string.Equals(previous, fromPayload, StringComparison.Ordinal))
                 {
@@ -146,9 +205,15 @@ public sealed class WlanMonitor : IDisposable
                 connectedSsids.TryGetValue(notification.InterfaceGuid, out var previous);
                 disconnected = fromPayload ?? previous;
                 if (current is null || string.Equals(current, disconnected, StringComparison.Ordinal))
+                {
                     connectedSsids.Remove(notification.InterfaceGuid);
+                    reportedSsids.Remove(notification.InterfaceGuid);
+                }
                 else
+                {
                     connectedSsids[notification.InterfaceGuid] = current;
+                    reportedSsids[notification.InterfaceGuid] = current;
+                }
             }
             if (disconnected is not null)
                 NetworkChanged?.Invoke(new WlanNetworkTransition(DateTimeOffset.Now,

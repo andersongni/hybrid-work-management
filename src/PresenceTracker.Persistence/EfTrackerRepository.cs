@@ -13,7 +13,7 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
         if (!await db.Settings.AnyAsync(cancellationToken))
         {
             db.Settings.Add(new TrackerSettings());
-            db.PresenceNetworks.Add(new PresenceNetwork { Ssid = "CORP", IsActive = true, CountsAsPresence = true });
+            db.PresenceNetworks.Add(new PresenceNetwork { Ssid = "CORP", IsActive = true, CountsAsPresence = false });
             await db.SaveChangesAsync(cancellationToken);
         }
         if (!await db.Holidays.AnyAsync(cancellationToken))
@@ -23,6 +23,35 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
             await db.SaveChangesAsync(cancellationToken);
         }
         await EnsureSnapshotAsync(DateOnly.FromDateTime(DateTime.Now), cancellationToken);
+    }
+
+    public async Task RefreshAfterRestoreAsync(CancellationToken cancellationToken = default)
+    {
+        db.ChangeTracker.Clear();
+        await db.Database.MigrateAsync(cancellationToken);
+    }
+
+    public async Task ResetToFactoryDefaultsAsync(CancellationToken cancellationToken = default)
+    {
+        db.ChangeTracker.Clear();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await db.AttendanceEvents.ExecuteDeleteAsync(cancellationToken);
+        await db.NetworkEvents.ExecuteDeleteAsync(cancellationToken);
+        await db.Plans.ExecuteDeleteAsync(cancellationToken);
+        await db.Classifications.ExecuteDeleteAsync(cancellationToken);
+        await db.Holidays.ExecuteDeleteAsync(cancellationToken);
+        await db.PresenceNetworks.ExecuteDeleteAsync(cancellationToken);
+        await db.MonthlySnapshots.ExecuteDeleteAsync(cancellationToken);
+        await db.Settings.ExecuteDeleteAsync(cancellationToken);
+
+        db.Settings.Add(new TrackerSettings());
+        db.PresenceNetworks.Add(new PresenceNetwork { Ssid = "CORP", IsActive = true, CountsAsPresence = false });
+        foreach (var year in new[] { DateTime.Today.Year, DateTime.Today.Year + 1 })
+            db.Holidays.AddRange(await localHolidays.GetHolidaysAsync(year, cancellationToken));
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+        await EnsureSnapshotAsync(DateOnly.FromDateTime(DateTime.Today), cancellationToken);
     }
 
     public async Task<TrackerMonthData> LoadMonthAsync(int year, int month, CancellationToken cancellationToken = default)
@@ -60,18 +89,20 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
                     if (classification is null && plan is null)
                         db.Plans.Add(new PresencePlan { Date = date, CreatedAt = DateTimeOffset.Now });
                     break;
-                case BatchAction.RemovePlan:
-                    if (plan is not null) db.Plans.Remove(plan);
-                    break;
-                case BatchAction.RemoveClassification:
-                    if (classification is not null) db.Classifications.Remove(classification);
-                    break;
-                case BatchAction.RemoveManualPresence:
+                case BatchAction.RestoreDefaults:
                 {
+                    if (plan is not null) db.Plans.Remove(plan);
+                    if (classification is not null) db.Classifications.Remove(classification);
                     var manualEvents = await db.AttendanceEvents.Where(x => x.Date == date && x.Source == AttendanceSource.Manual).ToListAsync(cancellationToken);
                     db.AttendanceEvents.RemoveRange(manualEvents);
+                    var excludedAutomaticEvents = await db.AttendanceEvents
+                        .Where(x => x.Date == date && x.Source == AttendanceSource.Automatic && x.Status == AttendanceStatus.Excluded)
+                        .ToListAsync(cancellationToken);
+                    foreach (var attendance in excludedAutomaticEvents)
+                        attendance.Status = AttendanceStatus.Active;
                     break;
-                }                default:
+                }
+                default:
                     var type = action switch
                     {
                         BatchAction.Vacation => AbsenceType.Vacation,
@@ -104,16 +135,20 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
         await db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<TrackerSettings> UpdateSettingsAsync(TrackerSettings settings, IReadOnlyCollection<PresenceNetwork> networks, CancellationToken cancellationToken = default)
+    public async Task<TrackerSettings> UpdateSettingsAsync(TrackerSettings settings, IReadOnlyCollection<PresenceNetwork> networks,
+        CancellationToken cancellationToken = default, IReadOnlyCollection<int>? removedNetworkIds = null)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var current = await db.Settings.FirstAsync(cancellationToken);
         current.TargetPercent = settings.TargetPercent;
         current.WorkingDays = settings.WorkingDays;
+        current.CalendarWeekStartsOn = settings.CalendarWeekStartsOn;
         current.StartWithWindows = settings.StartWithWindows;
         current.MinimizeToTray = settings.MinimizeToTray;
         current.Theme = settings.Theme;
         current.BackupRetentionCount = settings.BackupRetentionCount;
+        current.BackupIntervalHours = settings.BackupIntervalHours;
+        current.BackupFolder = settings.BackupFolder;
         current.MinimumLogLevel = settings.MinimumLogLevel;
         var existing = await db.PresenceNetworks.ToListAsync(cancellationToken);
         var incomingIds = networks.Where(n => n.Id != 0).Select(n => n.Id).ToHashSet();
@@ -123,7 +158,8 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
             if (match is not null)
                 incomingIds.Add(match.Id);
         }
-        db.PresenceNetworks.RemoveRange(existing.Where(n => !incomingIds.Contains(n.Id)));
+        var explicitRemovals = removedNetworkIds?.ToHashSet() ?? [];
+        db.PresenceNetworks.RemoveRange(existing.Where(n => explicitRemovals.Contains(n.Id)));
         var addedNetworks = new List<(PresenceNetwork Input, PresenceNetwork Entity)>();
         foreach (var network in networks)
         {
@@ -182,7 +218,15 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
         await db.SaveChangesAsync(cancellationToken);
         if (change.Type == NetworkEventType.Connected && !string.IsNullOrWhiteSpace(change.Ssid))
         {
-            var configuredNetworks = await db.PresenceNetworks.AsNoTracking().Where(x => x.IsActive && x.CountsAsPresence).ToListAsync(cancellationToken);
+            var allNetworks = await db.PresenceNetworks.ToListAsync(cancellationToken);
+            var knownNetwork = allNetworks.FirstOrDefault(x => string.Equals(x.Ssid, change.Ssid.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (knownNetwork is null)
+            {
+                knownNetwork = new PresenceNetwork { Ssid = change.Ssid.Trim(), IsActive = true, CountsAsPresence = false };
+                db.PresenceNetworks.Add(knownNetwork);
+            }
+
+            var configuredNetworks = allNetworks.Where(x => x.IsActive && x.CountsAsPresence).ToList();
             var qualifies = configuredNetworks.Any(x => string.Equals(x.Ssid, change.Ssid, StringComparison.OrdinalIgnoreCase));
             if (qualifies)
             {

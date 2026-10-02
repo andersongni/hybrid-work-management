@@ -46,7 +46,8 @@ internal sealed class HistoryForm : Form
                 if (data.Data.AttendanceEvents.Count == 0 && data.Data.Classifications.Count == 0 && data.Data.Plans.Count == 0)
                     continue;
                 var metrics = data.Metrics;
-                var row = new ListViewItem(date.ToDateTime(TimeOnly.MinValue).ToString("MMMM yyyy"));
+                var monthTitle = date.ToDateTime(TimeOnly.MinValue).ToString("MMMM yyyy", new System.Globalization.CultureInfo("pt-BR"));
+                var row = new ListViewItem(new System.Globalization.CultureInfo("pt-BR").TextInfo.ToTitleCase(monthTitle));
                 row.SubItems.Add($"{metrics.RealizedDays} / {metrics.EligibleWorkingDays}");
                 row.SubItems.Add($"{metrics.MonthlyPercent:0.#}%");
                 row.SubItems.Add($"{metrics.TargetPercent:0.#}%");

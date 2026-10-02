@@ -22,7 +22,7 @@ internal sealed class DayDetailsForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         Controls.Add(root);
         var result = outcome.CountsAsPresence ? "Contabilizado" : $"Não contabilizado: {outcome.Reason}";
-        root.Controls.Add(new Label { Text = $"{outcome.Reason}\\n{result}", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        root.Controls.Add(new Label { Text = $"{outcome.Reason}\n{result}", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
 
         var attendanceRows = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
         attendanceRows.SizeChanged += (_, _) => ResizeAttendanceRows(attendanceRows);
@@ -31,19 +31,42 @@ internal sealed class DayDetailsForm : Form
             var row = new Panel { Width = 560, Height = 42 };
             var label = new Label
             {
-                Text = $"{(item.Source == AttendanceSource.Automatic ? "Presencial automático" : "Presencial manual")} · {item.OccurredAt.ToLocalTime():HH:mm:ss} · {(item.Status == AttendanceStatus.Active ? "Ativo" : "Excluído manualmente")}",
-                Location = new Point(4, 8), Width = 415, Height = 26, TextAlign = ContentAlignment.MiddleLeft
+                Text = AttendanceDescription(item),
+                Location = new Point(4, 8), Width = 400, Height = 26, TextAlign = ContentAlignment.MiddleLeft
             };
             row.Controls.Add(label);
             if (item.Source == AttendanceSource.Automatic)
             {
-                var action = new Button { Text = item.Status == AttendanceStatus.Active ? "Excluir" : "Restaurar", Location = new Point(430, 5), Width = 110, Height = 30 };
-                action.Click += async (_, _) =>
+                var count = new CheckBox
                 {
-                    await updateStatus(item.Id, item.Status == AttendanceStatus.Active ? AttendanceStatus.Excluded : AttendanceStatus.Active);
-                    Close();
+                    Text = "Contabilizar", Checked = item.Status == AttendanceStatus.Active,
+                    AutoSize = true, Location = new Point(430, 8), Height = 26
                 };
-                row.Controls.Add(action);
+                var changing = false;
+                count.CheckedChanged += async (_, _) =>
+                {
+                    if (changing) return;
+                    var nextStatus = count.Checked ? AttendanceStatus.Active : AttendanceStatus.Excluded;
+                    count.Enabled = false;
+                    try
+                    {
+                        await updateStatus(item.Id, nextStatus);
+                        label.Text = AttendanceDescription(item, nextStatus);
+                    }
+                    catch (Exception exception)
+                    {
+                        changing = true;
+                        count.Checked = !count.Checked;
+                        changing = false;
+                        MessageBox.Show(this, $"Não foi possível atualizar a contabilização da presença. {exception.Message}",
+                            "Presence Tracker", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        count.Enabled = true;
+                    }
+                };
+                row.Controls.Add(count);
             }
             attendanceRows.Controls.Add(row);
         }
@@ -83,13 +106,16 @@ internal sealed class DayDetailsForm : Form
         UiTheme.Apply(this, theme);
     }
 
+    private static string AttendanceDescription(AttendanceEvent item, AttendanceStatus? statusOverride = null) =>
+        $"{(item.Source == AttendanceSource.Automatic ? "Presencial automático" : "Presencial manual")} · {item.OccurredAt.ToLocalTime():HH:mm:ss} · {((statusOverride ?? item.Status) == AttendanceStatus.Active ? "Capturada" : "Desconsiderada")}";
+
     private static void ResizeAttendanceRows(FlowLayoutPanel rows)
     {
         var rowWidth = Math.Max(300, rows.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 6);
         foreach (var row in rows.Controls.OfType<Panel>())
         {
             row.Width = rowWidth;
-            var action = row.Controls.OfType<Button>().FirstOrDefault();
+            var action = row.Controls.OfType<CheckBox>().FirstOrDefault();
             var label = row.Controls.OfType<Label>().FirstOrDefault();
             if (action is null)
             {
@@ -97,7 +123,7 @@ internal sealed class DayDetailsForm : Form
                 continue;
             }
 
-            action.Location = new Point(rowWidth - action.Width - 4, 5);
+            action.Location = new Point(rowWidth - action.Width - 4, 8);
             if (label is not null)
                 label.Width = Math.Max(100, action.Left - 12);
         }

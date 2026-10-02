@@ -15,10 +15,13 @@ public sealed class TrackerSettings
     public int Id { get; set; } = 1;
     public decimal TargetPercent { get; set; } = 40m;
     public WorkingDays WorkingDays { get; set; } = WorkingDays.Weekdays;
+    public DayOfWeek CalendarWeekStartsOn { get; set; } = DayOfWeek.Monday;
     public bool StartWithWindows { get; set; } = true;
     public bool MinimizeToTray { get; set; } = true;
     public ThemeMode Theme { get; set; } = ThemeMode.System;
     public int BackupRetentionCount { get; set; } = 30;
+    public int BackupIntervalHours { get; set; } = 24;
+    public string BackupFolder { get; set; } = "";
     public string MinimumLogLevel { get; set; } = "Information";
 }
 
@@ -27,7 +30,7 @@ public sealed class PresenceNetwork
     public int Id { get; set; }
     public string Ssid { get; set; } = "";
     public bool IsActive { get; set; } = true;
-    public bool CountsAsPresence { get; set; } = true;
+    public bool CountsAsPresence { get; set; }
 }
 
 public sealed class Holiday

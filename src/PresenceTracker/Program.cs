@@ -59,19 +59,14 @@ internal static class Program
                 .Where(network => network.IsActive && network.CountsAsPresence)
                 .Select(network => network.Ssid)
                 .ToArray();
-            var today = DateOnly.FromDateTime(DateTime.Today);
-            var hasAttendanceForToday = initial.Data.AttendanceEvents.Any(attendance =>
-                attendance.Date == today && (attendance.Source == AttendanceSource.Automatic || attendance.Status == AttendanceStatus.Active));
             try
             {
-                if (hasAttendanceForToday)
-                    monitor.MarkCurrentConnectionsForNetworks(configuredNetworks);
-                else
-                    monitor.RecordCurrentConnectionsForNetworks(configuredNetworks);
+                monitor.ObserveCurrentConnections();
+                monitor.MarkCurrentConnectionsForNetworks(configuredNetworks);
             }
             catch (Exception exception)
             {
-                logger.LogWarning(exception, "Não foi possível reconciliar a rede conectada na inicialização.");
+                logger.LogWarning(exception, "Não foi possível detectar as redes conectadas na inicialização.");
             }
             using var stop = new CancellationTokenSource();
             var form = uiScope.ServiceProvider.GetRequiredService<MainForm>();
