@@ -1,0 +1,43 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore PresenceTracker.sln
+
+      - name: Build project
+        run: dotnet build -c Release --no-restore PresenceTracker.sln
+
+      - name: Publish Installer
+        run: dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/publish/win-x64
+
+      - name: Create Portable Version
+        run: dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/portable
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v2
+        with:
+          name: PresenceTracker-Installer
+          path: artifacts/publish/win-x64/*
+
+      - name: Upload Portable Version
+        uses: actions/upload-artifact@v2
+        with:
+          name: PresenceTracker-Portable
+          path: artifacts/portable/*
