@@ -107,11 +107,77 @@ internal sealed class SettingsForm : Form
         theme.Items.AddRange(Enum.GetValues<ThemeMode>().Cast<object>().ToArray());
         theme.SelectedItem = settings.Theme;
         AddSettingRow(generalGrid, 3, "Tema", theme);
+        tabs.TabPages.Add(general);
+
+        var networkPage = new TabPage("Redes");
+        var networkRoot = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 3 };
+        networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        networkRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        networkPage.Controls.Add(networkRoot);
+        var addNetwork = Button("Adicionar rede Wi-Fi", (_, _) =>
+        {
+            networks.Add(new PresenceNetwork { Ssid = "", IsActive = true, CountsAsPresence = false });
+            RenderNetworks();
+            QueueSave();
+        });
+        networkRoot.Controls.Add(addNetwork, 0, 0);
+        networkRoot.Controls.Add(NetworkHeader(), 0, 1);
+        networkRows.Dock = DockStyle.Fill;
+        networkRows.FlowDirection = FlowDirection.TopDown;
+        networkRows.WrapContents = false;
+        networkRows.AutoScroll = true;
+        networkRows.SizeChanged += (_, _) => ResizeNetworkRows();
+        networkRoot.Controls.Add(networkRows, 0, 2);
+        RenderNetworks();
+        tabs.TabPages.Add(networkPage);
+
+        var dateConfigPage = new TabPage("Datas");
+        var dateConfigScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        dateConfigPage.Controls.Add(dateConfigScroll);
+        var dateConfigLayout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, RowCount = 2, AutoSize = true, Padding = Padding.Empty };
+        dateConfigLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        dateConfigLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        dateConfigScroll.Controls.Add(dateConfigLayout);
+        
+        var dateGrid = SettingsGrid(1);
         weekStartsOn.DropDownStyle = ComboBoxStyle.DropDownList;
         weekStartsOn.Items.AddRange(["Segunda-feira", "Domingo"]);
         weekStartsOn.SelectedIndex = settings.CalendarWeekStartsOn == DayOfWeek.Sunday ? 1 : 0;
-        AddSettingRow(generalGrid, 4, "Semana começa em", weekStartsOn);
-        tabs.TabPages.Add(general);
+        AddSettingRow(dateGrid, 0, "Semana começa em", weekStartsOn);
+        dateConfigLayout.Controls.Add(dateGrid, 0, 0);
+        
+        var dateActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.TopDown, Padding = new Padding(14, 6, 14, 12) };
+        
+        var weekdaysLabel = new Label { Text = "Dias úteis", Font = new Font("Segoe UI", 10, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
+        dateActions.Controls.Add(weekdaysLabel);
+        var daysGrid = new FlowLayoutPanel { Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 16), FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true };
+        var weekdayItems = new[]
+        {
+            (DayOfWeek.Monday, "Segunda-feira"), (DayOfWeek.Tuesday, "Terça-feira"),
+            (DayOfWeek.Wednesday, "Quarta-feira"), (DayOfWeek.Thursday, "Quinta-feira"),
+            (DayOfWeek.Friday, "Sexta-feira"), (DayOfWeek.Saturday, "Sábado"), (DayOfWeek.Sunday, "Domingo")
+        };
+        foreach (var (day, name) in weekdayItems)
+        {
+            var check = new CheckBox { Text = name, Width = 250, Height = 32, Checked = IsEnabled(settings.WorkingDays, day) };
+            check.CheckedChanged += (_, _) => QueueSave();
+            weekdays[day] = check;
+            daysGrid.Controls.Add(check);
+        }
+        dateActions.Controls.Add(daysGrid);
+        
+        var holidaysLabel = new Label { Text = "Feriados", Font = new Font("Segoe UI", 10, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
+        dateActions.Controls.Add(holidaysLabel);
+        dateActions.Controls.Add(new Label { Text = "Consulte e corrija feriados nacionais, estaduais, municipais e personalizados.", AutoSize = true, Padding = new Padding(0, 0, 0, 12) });
+        dateActions.Controls.Add(Button("Gerenciar feriados e sincronizar", (_, _) =>
+        {
+            using var form = new HolidayManagementForm(tracker, logger, settings.Theme);
+            form.ShowDialog(this);
+        }));
+        
+        dateConfigLayout.Controls.Add(dateActions, 0, 1);
+        tabs.TabPages.Add(dateConfigPage);
 
         var backupPage = new TabPage("Backup");
         var backupContent = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
@@ -152,73 +218,27 @@ internal sealed class SettingsForm : Form
         tabs.TabPages.Add(backupPage);
 
         var developerPage = new TabPage("Desenvolvedor");
-        var developerGrid = SettingsGrid();
-        developerPage.Controls.Add(developerGrid);
+        var developerGrid = SettingsGrid(2);
+        var developerScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        developerPage.Controls.Add(developerScroll);
+        developerScroll.Controls.Add(developerGrid);
         logLevel.DropDownStyle = ComboBoxStyle.DropDownList;
         logLevel.Items.AddRange(new object[] { "Debug", "Information", "Warning", "Error" });
         logLevel.SelectedItem = settings.MinimumLogLevel;
         AddSettingRow(developerGrid, 0, "Nível de log", logLevel);
+        var factoryRestoreButton = Button("Restaurar configurações de fábrica", async (_, _) => await RestoreFactoryDefaultsAsync(backup));
+        factoryRestoreButton.Dock = DockStyle.Fill;
+        factoryRestoreButton.AutoSize = false;
+        developerGrid.Controls.Add(factoryRestoreButton, 0, 1);
+        developerGrid.SetColumnSpan(factoryRestoreButton, 2);
         var developerActions = new FlowLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, WrapContents = true,
             Padding = new Padding(14, 6, 14, 6), Margin = Padding.Empty
         };
         developerActions.Controls.Add(Button("Abrir logs", (_, _) => OpenFolder(AppDataPaths.Logs)));
-        developerActions.Controls.Add(Button("Restaurar configurações de fábrica", async (_, _) => await RestoreFactoryDefaultsAsync(backup)));
         developerPage.Controls.Add(developerActions);
         tabs.TabPages.Add(developerPage);
-
-        var networkPage = new TabPage("Redes");
-        var networkRoot = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 3 };
-        networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        networkRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        networkPage.Controls.Add(networkRoot);
-        var addNetwork = Button("Adicionar rede Wi-Fi", (_, _) =>
-        {
-            networks.Add(new PresenceNetwork { Ssid = "", IsActive = true, CountsAsPresence = false });
-            RenderNetworks();
-            QueueSave();
-        });
-        networkRoot.Controls.Add(addNetwork, 0, 0);
-        networkRoot.Controls.Add(NetworkHeader(), 0, 1);
-        networkRows.Dock = DockStyle.Fill;
-        networkRows.FlowDirection = FlowDirection.TopDown;
-        networkRows.WrapContents = false;
-        networkRows.AutoScroll = true;
-        networkRows.SizeChanged += (_, _) => ResizeNetworkRows();
-        networkRoot.Controls.Add(networkRows, 0, 2);
-        RenderNetworks();
-        tabs.TabPages.Add(networkPage);
-
-        var workdaysPage = new TabPage("Dias úteis");
-        var daysGrid = new FlowLayoutPanel { Dock = DockStyle.Top, Padding = new Padding(14), FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true };
-        var weekdayItems = new[]
-        {
-            (DayOfWeek.Monday, "Segunda-feira"), (DayOfWeek.Tuesday, "Terça-feira"),
-            (DayOfWeek.Wednesday, "Quarta-feira"), (DayOfWeek.Thursday, "Quinta-feira"),
-            (DayOfWeek.Friday, "Sexta-feira"), (DayOfWeek.Saturday, "Sábado"), (DayOfWeek.Sunday, "Domingo")
-        };
-        foreach (var (day, name) in weekdayItems)
-        {
-            var check = new CheckBox { Text = name, Width = 250, Height = 32, Checked = IsEnabled(settings.WorkingDays, day) };
-            check.CheckedChanged += (_, _) => QueueSave();
-            weekdays[day] = check;
-            daysGrid.Controls.Add(check);
-        }
-        workdaysPage.Controls.Add(daysGrid);
-        tabs.TabPages.Add(workdaysPage);
-
-        var holidayPage = new TabPage("Feriados");
-        var holidayPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Padding = new Padding(14), FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true };
-        holidayPanel.Controls.Add(new Label { Text = "Consulte e corrija feriados nacionais, estaduais, municipais e personalizados.", AutoSize = true, Padding = new Padding(0, 4, 0, 16) });
-        holidayPanel.Controls.Add(Button("Gerenciar feriados e sincronizar", (_, _) =>
-        {
-            using var form = new HolidayManagementForm(tracker, logger, settings.Theme);
-            form.ShowDialog(this);
-        }));
-        holidayPage.Controls.Add(holidayPanel);
-        tabs.TabPages.Add(holidayPage);
 
         saveStatus.Text = "Todas as alterações são salvas automaticamente.";
         saveStatus.Dock = DockStyle.Fill;
