@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v1
@@ -31,13 +31,13 @@ jobs:
         run: dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/portable
 
       - name: Upload Installer
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: PresenceTracker-Installer
           path: artifacts/publish/win-x64/*
 
       - name: Upload Portable Version
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: PresenceTracker-Portable
           path: artifacts/portable/*
