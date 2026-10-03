@@ -22,6 +22,7 @@ internal sealed class SettingsForm : Form
     private readonly NumericUpDown target = new();
     private readonly NumericUpDown retention = new();
     private readonly NumericUpDown backupInterval = new();
+    private readonly NumericUpDown wifiCheckInterval = new();
     private readonly TextBox backupFolder = new() { ReadOnly = true };
     private readonly CheckBox startup = new();
     private readonly CheckBox minimize = new();
@@ -48,6 +49,7 @@ internal sealed class SettingsForm : Form
             StartWithWindows = settings.StartWithWindows, MinimizeToTray = settings.MinimizeToTray,
             Theme = settings.Theme, BackupRetentionCount = settings.BackupRetentionCount,
             BackupIntervalHours = settings.BackupIntervalHours,
+            WifiCheckIntervalMinutes = settings.WifiCheckIntervalMinutes,
             BackupFolder = settings.BackupFolder,
             MinimumLogLevel = settings.MinimumLogLevel
         };
@@ -97,12 +99,14 @@ internal sealed class SettingsForm : Form
         target.DecimalPlaces = 0; target.Minimum = 1m; target.Maximum = 100m; target.Increment = 1m;
         target.Value = Math.Clamp(decimal.Round(settings.TargetPercent, 0, MidpointRounding.AwayFromZero), 1m, 100m);
         AddSettingRow(generalGrid, 0, "Meta mensal (%)", target);
-        startup.Text = "Iniciar"; startup.Checked = settings.StartWithWindows;
+        startup.Text = "Abrir o programa ao iniciar o Windows";
+        startup.Checked = settings.StartWithWindows;
         startup.AutoSize = false; startup.Dock = DockStyle.Fill; startup.TextAlign = ContentAlignment.MiddleLeft;
-        AddSettingRow(generalGrid, 1, "Inicialização", startup);
-        minimize.Text = "Ao fechar"; minimize.Checked = settings.MinimizeToTray;
+        AddSettingRow(generalGrid, 1, "Com o Windows", startup);
+        minimize.Text = "Minimizar para a bandeja ao fechar (não encerrar)";
+        minimize.Checked = settings.MinimizeToTray;
         minimize.AutoSize = false; minimize.Dock = DockStyle.Fill; minimize.TextAlign = ContentAlignment.MiddleLeft;
-        AddSettingRow(generalGrid, 2, "Fechamento", minimize);
+        AddSettingRow(generalGrid, 2, "Ao fechar", minimize);
         theme.DropDownStyle = ComboBoxStyle.DropDownList;
         theme.Items.AddRange(Enum.GetValues<ThemeMode>().Cast<object>().ToArray());
         theme.SelectedItem = settings.Theme;
@@ -110,25 +114,32 @@ internal sealed class SettingsForm : Form
         tabs.TabPages.Add(general);
 
         var networkPage = new TabPage("Redes");
-        var networkRoot = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 3 };
+        var networkRoot = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 4 };
+        networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
         networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         networkRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         networkRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         networkPage.Controls.Add(networkRoot);
+        var networkIntervalGrid = SettingsGrid(1);
+        networkIntervalGrid.Padding = new Padding(0, 0, 0, 8);
+        wifiCheckInterval.Minimum = 1; wifiCheckInterval.Maximum = 1440;
+        wifiCheckInterval.Value = Math.Clamp(settings.WifiCheckIntervalMinutes, 1, 1440);
+        AddSettingRow(networkIntervalGrid, 0, "Verificar Wi-Fi (minutos)", wifiCheckInterval);
+        networkRoot.Controls.Add(networkIntervalGrid, 0, 0);
         var addNetwork = Button("Adicionar rede Wi-Fi", (_, _) =>
         {
             networks.Add(new PresenceNetwork { Ssid = "", IsActive = true, CountsAsPresence = false });
             RenderNetworks();
             QueueSave();
         });
-        networkRoot.Controls.Add(addNetwork, 0, 0);
-        networkRoot.Controls.Add(NetworkHeader(), 0, 1);
+        networkRoot.Controls.Add(addNetwork, 0, 1);
+        networkRoot.Controls.Add(NetworkHeader(), 0, 2);
         networkRows.Dock = DockStyle.Fill;
         networkRows.FlowDirection = FlowDirection.TopDown;
         networkRows.WrapContents = false;
         networkRows.AutoScroll = true;
         networkRows.SizeChanged += (_, _) => ResizeNetworkRows();
-        networkRoot.Controls.Add(networkRows, 0, 2);
+        networkRoot.Controls.Add(networkRows, 0, 3);
         RenderNetworks();
         tabs.TabPages.Add(networkPage);
 
@@ -253,6 +264,7 @@ internal sealed class SettingsForm : Form
         theme.SelectedValueChanged += (_, _) => { QueueSave(); if (theme.SelectedItem is ThemeMode selected) UiTheme.Apply(this, selected); };
         retention.ValueChanged += (_, _) => QueueSave();
         backupInterval.ValueChanged += (_, _) => QueueSave();
+        wifiCheckInterval.ValueChanged += (_, _) => QueueSave();
         logLevel.SelectedValueChanged += (_, _) => QueueSave();
         weekStartsOn.SelectedValueChanged += (_, _) => QueueSave();
     }
@@ -336,6 +348,7 @@ internal sealed class SettingsForm : Form
             settings.Theme = theme.SelectedItem is ThemeMode selectedTheme ? selectedTheme : ThemeMode.System;
             settings.BackupRetentionCount = (int)retention.Value;
             settings.BackupIntervalHours = (int)backupInterval.Value;
+            settings.WifiCheckIntervalMinutes = (int)wifiCheckInterval.Value;
             settings.BackupFolder = GetBackupDirectory();
             settings.MinimumLogLevel = logLevel.SelectedItem?.ToString() ?? "Information";
             settings.WorkingDays = WorkingDays.None;

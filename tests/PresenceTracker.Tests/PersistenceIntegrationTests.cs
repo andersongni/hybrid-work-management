@@ -23,6 +23,7 @@ public sealed class PersistenceIntegrationTests
         var config = await db.Settings.SingleAsync();
         Assert.Equal(40m, config.TargetPercent);
         Assert.Equal(WorkingDays.Weekdays, config.WorkingDays);
+        Assert.Equal(10, config.WifiCheckIntervalMinutes);
         Assert.Contains(await db.PresenceNetworks.ToListAsync(), n => n.Ssid == "CORP" && n.IsActive);
         Assert.Contains(await db.Holidays.ToListAsync(), h => h.Date == new DateOnly(2026, 7, 9) && h.Scope == HolidayScope.State);
 
@@ -69,6 +70,25 @@ public sealed class PersistenceIntegrationTests
         var result = (await repository.GetHolidaysAsync(2026)).Where(h => h.Date == date).ToArray();
         Assert.Contains(result, h => h.Name == "Independência corrigida" && h.Source == HolidaySource.Manual);
         Assert.DoesNotContain(result, h => h.Name == "Nome remoto");
+    }
+
+    [Fact]
+    public async Task UpdateSettingsPersistsWifiCheckInterval()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<TrackerDbContext>().UseSqlite(connection).Options;
+        await using var db = new TrackerDbContext(options);
+        var repository = new EfTrackerRepository(db, new LocalHolidayProvider());
+        await repository.InitializeAsync();
+
+        var settings = await db.Settings.AsNoTracking().SingleAsync();
+        settings.WifiCheckIntervalMinutes = 15;
+        var networks = await db.PresenceNetworks.AsNoTracking().ToListAsync();
+        await repository.UpdateSettingsAsync(settings, networks);
+
+        db.ChangeTracker.Clear();
+        Assert.Equal(15, (await db.Settings.SingleAsync()).WifiCheckIntervalMinutes);
     }
 }
 

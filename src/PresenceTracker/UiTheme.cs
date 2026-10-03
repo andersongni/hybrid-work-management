@@ -28,12 +28,8 @@ internal static class UiTheme
         {
             form.BackColor = background;
             form.ForeColor = text;
-            form.Font = new Font("Segoe UI", 9F);
-            try
-            {
-                form.Icon = Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath) ?? SystemIcons.Application;
-            }
-            catch (Exception) { }
+            if (form.Font.Name != "Segoe UI" || Math.Abs(form.Font.SizeInPoints - 9F) > 0.01F)
+                form.Font = new Font("Segoe UI", 9F);
         }
 
         ApplyControl(root, dark, background, surface, text, muted, border);

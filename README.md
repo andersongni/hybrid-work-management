@@ -20,14 +20,14 @@ Ele foi construído como um utilitário desktop com WinForms, com foco em uso lo
 ## Principais recursos
 
 - Monitoramento de conexão e desconexão via API nativa do Windows WLAN
+- Verificação periódica do SSID conectado (intervalo configurável; padrão 10 minutos)
 - Registro de eventos de rede por dia e por rede configurada
 - Suporte a presença manual, exclusão e restauração de registros automáticos
 - Calendário com seleção por dia, intervalo e ações em lote
 - Cálculo de ritmo, percentual mensal, projeção e dias necessários para atingir a meta
 - Gestão de feriados locais e remotos (BrasilAPI)
-- Persistência em SQLite com backups rotativos
-- Backup periódico e logs configuráveis
-- Inicialização automática com o Windows
+- Persistência em SQLite com backups rotativos e restauração pela interface
+- Inicialização com o Windows e minimização para a bandeja ao fechar
 
 ## Arquitetura
 
@@ -46,77 +46,121 @@ tests/
 installer/
   PresenceTracker.iss              Instalador Inno Setup
   build.ps1                        Script de publicação e geração do setup
-
-docs/
-  ...
 ~~~
 
 Tecnologias principais:
 
-- C#
-- .NET 8
+- C# / .NET 8
 - Windows Forms
-- Entity Framework Core
-- SQLite
-- Microsoft.Extensions.DependencyInjection
-- Microsoft.Extensions.Logging
-- API WLAN nativa do Windows
+- Entity Framework Core + SQLite
+- Microsoft.Extensions.DependencyInjection / Logging
+- API WLAN nativa do Windows (`wlanapi.dll`)
 
 ## Requisitos
 
 - Windows 10/11 x64
 - Serviço WLAN ativo no sistema
-- .NET SDK 8 para compilar o projeto no ambiente de desenvolvimento
-- Inno Setup 6 para gerar o instalador
+- [.NET SDK 8](https://dotnet.microsoft.com/download/dotnet/8.0) para desenvolvimento
+- Inno Setup 6 apenas se for gerar o instalador
 
-> A máquina final não precisa do runtime .NET instalado, pois a distribuição pode ser publicada como self-contained.
+> A distribuição release pode ser self-contained; a máquina final não precisa do runtime .NET instalado.
 
 ## Executando em desenvolvimento
+
+### 1. Preparar o ambiente
 
 Na raiz do repositório:
 
 ~~~powershell
+dotnet --list-sdks
 dotnet restore PresenceTracker.sln
+~~~
+
+Confirme que há um SDK `8.x` instalado. Se `restore` falhar, instale o .NET 8 SDK e reabra o terminal.
+
+### 2. Compilar
+
+~~~powershell
 dotnet build PresenceTracker.sln
+~~~
+
+### 3. Executar o aplicativo
+
+~~~powershell
 dotnet run --project src/PresenceTracker/PresenceTracker.csproj
 ~~~
 
-A aplicação roda na bandeja do sistema. O menu de bandeja permite abrir a janela principal e encerrar o monitoramento quando necessário.
+Comportamento esperado:
+
+- Abre a janela principal do Presence Tracker
+- Uma única instância é permitida; uma segunda execução simplesmente encerra
+- Com **Ao fechar → Minimizar para a bandeja** ativo (padrão), o X não encerra o programa: ele continua na bandeja do sistema
+- Para encerrar de verdade, use **Sair** no menu da bandeja
+
+### 4. Recarregar alterações de código
+
+O `dotnet run` não recarrega automaticamente após edições. Para testar mudanças:
+
+1. Encerre a instância atual pela bandeja (**Sair**)
+2. Pare o processo no terminal com `Ctrl+C`, se ainda estiver ativo
+3. Execute novamente `dotnet run --project src/PresenceTracker/PresenceTracker.csproj`
+
+Se o build avisar que `PresenceTracker.exe` está em uso, ainda há uma instância aberta (geralmente na bandeja).
+
+### 5. Testes
+
+~~~powershell
+dotnet test PresenceTracker.sln
+~~~
+
+### 6. Atalhos úteis em desenvolvimento
+
+| Ação | Comando / caminho |
+| --- | --- |
+| Só o app | `dotnet run --project src/PresenceTracker/PresenceTracker.csproj` |
+| Só testes | `dotnet test PresenceTracker.sln` |
+| Banco local | `%LOCALAPPDATA%\PresenceTracker\presence.db` |
+| Logs | `%LOCALAPPDATA%\PresenceTracker\logs` |
+| Backups | `%LOCALAPPDATA%\PresenceTracker\backups` |
+
+Configurações relevantes na UI:
+
+- **Configurações → Geral**: iniciar com o Windows; minimizar para a bandeja ao fechar
+- **Configurações → Redes**: SSIDs presenciais e intervalo de verificação Wi‑Fi (minutos)
+- **Configurações → Backup**: pasta, retenção e intervalo de backup
+- **Configurações → Datas**: dias úteis, início da semana e feriados
 
 ## Publicando e gerando o instalador
 
-Para publicar a build de release em Windows:
+Publicação release (self-contained, single-file):
 
 ~~~powershell
 dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/publish/win-x64
 ~~~
 
-Depois, com o Inno Setup instalado, execute:
+Com o Inno Setup instalado:
 
 ~~~powershell
 powershell -File installer/build.ps1
 ~~~
 
-O instalador gerado fica em `artifacts/installer/` e o aplicativo cria atalhos e pode ser configurado para iniciar junto com o Windows.
+O instalador fica em `artifacts/installer/`.
 
 ## Organização de dados locais
-
-Os dados do usuário ficam em:
 
 ~~~text
 %LOCALAPPDATA%\PresenceTracker\
 ├── presence.db
 ├── backups\
 ├── logs\
-├── config\
 └── ...
 ~~~
 
-O banco é SQLite e os backups são realizados automaticamente em intervalos configurados, além de antes de operações mais sensíveis, como remoções em lote ou grandes alterações de calendário.
+Os backups rodam em intervalos configuráveis e também antes de operações sensíveis (por exemplo, restauração de fábrica). A restauração também pode ser feita em **Configurações → Backup**.
 
 ### Recuperação manual de backup
 
-1. Feche o Presence Tracker pela bandeja.
+1. Feche o Presence Tracker pela bandeja (**Sair**).
 2. Acesse `%LOCALAPPDATA%\PresenceTracker\backups`.
 3. Copie o backup desejado para outra pasta.
 4. Substitua `presence.db` pela cópia restaurada.
@@ -139,11 +183,11 @@ A sincronização é opcional, não bloqueia o uso do programa e continua funcio
 
 A presença automática depende de:
 
-- rede configurada como ativa
-- rede marcada como contando presença
-- notificação de conexão do Windows para aquele SSID
+- rede cadastrada, ativa e marcada como “considerar presencial”
+- evento de conexão (notificação WLAN do Windows) **ou**
+- verificação periódica do SSID (Configurações → Redes), quando o SSID atual difere do último registrado
 
-Conexões repetidas são registradas em eventos técnicos, mas não geram duplicação de presença para o mesmo dia. Também há proteção para evitar que uma conexão antiga seja interpretada como presença no dia seguinte após suspensão ou hibernação do sistema.
+Se o SSID for o mesmo da última verificação, nenhum registro novo é criado. Conexões repetidas no mesmo dia não duplicam a presença. Há proteção para evitar que uma conexão antiga seja interpretada como presença no dia seguinte após suspensão ou hibernação.
 
 ## Metas e cálculos
 
@@ -152,35 +196,27 @@ O aplicativo calcula:
 - ritmo até hoje
 - percentual do mês
 - dias necessários para atingir a meta
-- projeção de cumprimento
-- histórico por mês e comparação com meses anteriores
+- projeção de cumprimento com base no planejamento
+- histórico por mês
 
-A meta padrão é 40% e o sistema aceita valores em porcentagem dentro do escopo do produto.
-
-## Testes
-
-Para executar a suíte de testes:
-
-~~~powershell
-dotnet test PresenceTracker.sln
-~~~
-
-Os testes cobrem regras de presença, feriados, exceções, cálculos de meta, planejamento e persistência.
+A meta padrão é 40%.
 
 ## Diagnóstico rápido
 
-- Nenhuma presença automática: verifique se o SSID está cadastrado e ativo.
-- Wi‑Fi não monitorado: confirme que o adaptador e o serviço WLAN do Windows estão funcionando.
-- Problemas de sincronização: o calendário local continua funcionando sem internet.
-- Erro de SQLite: verifique os logs e restaure um backup íntegro.
-- Inicialização com o Windows: confira as opções em Configurações → Geral.
+- Nenhuma presença automática: verifique se o SSID está cadastrado, ativo e marcado como presencial
+- Wi‑Fi não monitorado: confirme o adaptador e o serviço WLAN do Windows
+- Intervalo de checagem: Configurações → Redes → Verificar Wi‑Fi (minutos)
+- Problemas de sincronização de feriados: o calendário local continua funcionando sem internet
+- Erro de SQLite: consulte os logs e restaure um backup íntegro
+- App “não fecha” com o X: comportamento esperado com minimização para a bandeja; use **Sair** na bandeja
+- Inicialização com o Windows: Configurações → Geral → Com o Windows
 
 ## Limitações conhecidas
 
-- O monitoramento depende do aplicativo estar em execução.
-- O calendário inicial tem foco em São Paulo; outras localidades exigem ajustes manuais.
-- Os dados ficam locais no computador e não são sincronizados entre máquinas.
-- A restauração do banco é manual e deve ser feita com cuidado.
+- O monitoramento depende do aplicativo estar em execução
+- O calendário inicial tem foco em São Paulo; outras localidades exigem ajustes manuais
+- Os dados ficam locais no computador e não são sincronizados entre máquinas
+- A restauração do banco deve ser feita com cuidado
 
 ## Licença
 

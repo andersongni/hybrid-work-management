@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using PresenceTracker.Application;
 using PresenceTracker.Domain;
@@ -9,6 +10,8 @@ namespace PresenceTracker;
 
 public sealed class MainForm : Form
 {
+    private const int WmSetRedraw = 0x000B;
+
     private readonly TrackerService tracker;
     private readonly WlanMonitor wlanMonitor;
     private readonly IDatabaseBackupService backup;
@@ -25,7 +28,14 @@ public sealed class MainForm : Form
     private readonly ToolStripStatusLabel statusText = new();
     private readonly NotifyIcon trayIcon = new();
     private readonly System.Windows.Forms.Timer refreshTimer = new();
+    private readonly System.Windows.Forms.Timer wifiCheckTimer = new();
     private readonly HashSet<DateOnly> selectedDates = [];
+    private readonly Label[] weekdayHeaders = new Label[7];
+    private readonly Button[] dayButtons = new Button[42];
+    private readonly ToolTip calendarTip = new();
+    private readonly MetricCardViews metricViews = new();
+    private readonly Font weekdayFont = new("Segoe UI", 9F, FontStyle.Bold);
+    private readonly Font dayCellFont = new("Segoe UI", 9F);
     private MonthViewData? viewData;
     private DateOnly month = new(DateTime.Today.Year, DateTime.Today.Month, 1);
     private DateOnly lastObservedToday = DateOnly.FromDateTime(DateTime.Today);
@@ -34,6 +44,9 @@ public sealed class MainForm : Form
     private bool exiting;
     private bool minimizeToTray = true;
     private ThemeMode currentTheme = ThemeMode.System;
+    private ThemeMode? appliedTheme;
+    private bool calendarBuilt;
+    private int refreshVersion;
 
     public MainForm(TrackerService tracker, WlanMonitor wlanMonitor,
         IDatabaseBackupService backup, ILogger<MainForm> logger)
@@ -63,22 +76,6 @@ public sealed class MainForm : Form
                     month = new DateOnly(today.Year, today.Month, 1);
             }
             lastObservedToday = today;
-            if (viewData is not null)
-            {
-                var configuredNetworks = viewData.Data.Networks
-                    .Where(network => network.IsActive && network.CountsAsPresence)
-                    .Select(network => network.Ssid)
-                    .ToArray();
-                try
-                {
-                    wlanMonitor.ObserveCurrentConnections();
-                    wlanMonitor.RecordCurrentConnectionsForNetworks(configuredNetworks);
-                }
-                catch (Exception exception)
-                {
-                    logger.LogWarning(exception, "Não foi possível reconciliar as redes conectadas.");
-                }
-            }
             await RefreshMonthAsync();
             if (viewData is not null)
             {
@@ -87,6 +84,9 @@ public sealed class MainForm : Form
             }
         };
         refreshTimer.Start();
+        wifiCheckTimer.Interval = 10 * 60_000;
+        wifiCheckTimer.Tick += (_, _) => CheckConnectedWifi();
+        wifiCheckTimer.Start();
         Load += async (_, _) => await RefreshMonthAsync();
         FormClosing += OnFormClosing;
     }
@@ -352,36 +352,74 @@ public sealed class MainForm : Form
 
     private async Task RefreshMonthAsync()
     {
+        var version = ++refreshVersion;
+        var requestedMonth = month;
         try
         {
             var today = DateOnly.FromDateTime(DateTime.Today);
-            var monthTitle = month.ToDateTime(TimeOnly.MinValue).ToString("MMMM yyyy", new CultureInfo("pt-BR"));
-            monthLabel.Text = new CultureInfo("pt-BR").TextInfo.ToTitleCase(monthTitle);
-            monthLabel.Width = TextRenderer.MeasureText(monthLabel.Text, monthLabel.Font).Width + 20;
-            viewData = await tracker.GetMonthAsync(month.Year, month.Month, today);
+            var loaded = await tracker.GetMonthAsync(requestedMonth.Year, requestedMonth.Month, today);
+            if (version != refreshVersion || month != requestedMonth || IsDisposed)
+                return;
+
+            viewData = loaded;
             minimizeToTray = viewData.Data.Settings.MinimizeToTray;
             currentTheme = viewData.Data.Settings.Theme;
-            RenderMetrics(viewData.Metrics);
-            RenderCalendar();
-            UiTheme.Apply(this, viewData.Data.Settings.Theme);
-            statusText.Text = $"Monitoramento Wi-Fi ativo · {viewData.Data.Networks.Count(n => n.IsActive && n.CountsAsPresence)} rede(s) presencial(is)";
+            ApplyWifiCheckInterval(viewData.Data.Settings.WifiCheckIntervalMinutes);
+
+            var monthTitle = requestedMonth.ToDateTime(TimeOnly.MinValue).ToString("MMMM yyyy", new CultureInfo("pt-BR"));
+            monthLabel.Text = new CultureInfo("pt-BR").TextInfo.ToTitleCase(monthTitle);
+            monthLabel.Width = Math.Max(180, TextRenderer.MeasureText(monthLabel.Text, monthLabel.Font).Width + 20);
+
+            SetRedraw(calendar, false);
+            SetRedraw(metricCards, false);
+            try
+            {
+                RenderMetrics(viewData.Metrics);
+                RenderCalendar();
+            }
+            finally
+            {
+                SetRedraw(metricCards, true);
+                SetRedraw(calendar, true);
+            }
+
+            if (appliedTheme != currentTheme)
+            {
+                appliedTheme = currentTheme;
+                UiTheme.Apply(this, currentTheme);
+            }
+
+            statusText.Text = $"Monitoramento Wi-Fi a cada {viewData.Data.Settings.WifiCheckIntervalMinutes} min · {viewData.Data.Networks.Count(n => n.IsActive && n.CountsAsPresence)} rede(s) presencial(is)";
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Falha ao atualizar o calendário de {Year}-{Month}.", month.Year, month.Month);
+            if (version != refreshVersion) return;
+            logger.LogError(exception, "Falha ao atualizar o calendário de {Year}-{Month}.", requestedMonth.Year, requestedMonth.Month);
             statusText.Text = "Erro ao carregar os dados locais.";
         }
     }
 
     private void RenderMetrics(MonthMetrics metrics)
     {
-        metricCards.Controls.Clear();
-        metricCards.Controls.Add(MetricCard("Ritmo atual", $"{metrics.CurrentPacePercent:0.#}%", $"{metrics.RealizedThroughToday} / {metrics.ElapsedWorkingDays} dias", Color.FromArgb(27, 158, 91), metrics.CurrentPacePercent), 0, 0);
-        metricCards.Controls.Add(MetricCard("Mês realizado", $"{metrics.MonthlyPercent:0.#}%", $"{metrics.RealizedDays} dia(s) presencial(is)", Color.FromArgb(126, 73, 214), metrics.MonthlyPercent), 1, 0);
+        EnsureMetricCards();
         var projectedDays = Math.Min(metrics.EligibleWorkingDays, metrics.RealizedDays + metrics.PlannedDays);
-        metricCards.Controls.Add(MetricCard("Planejamento", $"{metrics.ProjectedPercent:0.#}%", $"{projectedDays} dia(s) realizados/planejados", Color.FromArgb(20, 111, 242), metrics.ProjectedPercent), 2, 0);
-        var statusLine = metrics.TargetReachableByPlan ? "Meta atingível pelo planejamento" : $"Faltam {Math.Max(0, metrics.DaysNeeded - metrics.PlannedDays)} dia(s) planejado(s)";
-        metricCards.Controls.Add(MetricCard("Meta", $"{metrics.TargetPercent:0}%", $"Necessários: {metrics.TargetDays} dias"), 3, 0);
+        var statusLine = metrics.TargetReachableByPlan
+            ? "Meta atingível pelo planejamento"
+            : $"Faltam {Math.Max(0, metrics.DaysNeeded - metrics.PlannedDays)} dia(s) planejado(s)";
+
+        UpdateMetricCard(0, $"{metrics.CurrentPacePercent:0.#}%",
+            $"{metrics.RealizedThroughToday} / {metrics.ElapsedWorkingDays} dias",
+            Color.FromArgb(27, 158, 91), metrics.CurrentPacePercent);
+        UpdateMetricCard(1, $"{metrics.MonthlyPercent:0.#}%",
+            $"{metrics.RealizedDays} dia(s) presencial(is)",
+            Color.FromArgb(126, 73, 214), metrics.MonthlyPercent);
+        UpdateMetricCard(2, $"{metrics.ProjectedPercent:0.#}%",
+            $"{projectedDays} dia(s) realizados/planejados",
+            Color.FromArgb(20, 111, 242), metrics.ProjectedPercent);
+        UpdateMetricCard(3, $"{metrics.TargetPercent:0}%",
+            $"Necessários: {metrics.TargetDays} dias",
+            null, null);
+
         summaryValues["workdays"].Text = metrics.EligibleWorkingDays.ToString();
         summaryValues["realized"].Text = $"{metrics.RealizedDays} dia(s)";
         summaryValues["planned"].Text = $"{metrics.PlannedDays} dia(s)";
@@ -397,60 +435,174 @@ public sealed class MainForm : Form
         goalMessage.ForeColor = metrics.TargetReachableByPlan ? Color.FromArgb(27, 158, 91) : Color.FromArgb(177, 111, 0);
     }
 
-    private Control MetricCard(string title, string value, string subtitle, Color? accent = null, decimal? progress = null)
+    private void EnsureMetricCards()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, Height = 96, Margin = new Padding(0, 0, 10, 0), BackColor = UiTheme.Surface, Padding = new Padding(12), Tag = "card" };
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty, Padding = Padding.Empty, Tag = "card" };
+        if (metricViews.Built) return;
+        metricViews.Built = true;
+        CreateMetricCard(0, "Ritmo atual", Color.FromArgb(27, 158, 91), withProgress: true);
+        CreateMetricCard(1, "Mês realizado", Color.FromArgb(126, 73, 214), withProgress: true);
+        CreateMetricCard(2, "Planejamento", Color.FromArgb(20, 111, 242), withProgress: true);
+        CreateMetricCard(3, "Meta", null, withProgress: false);
+    }
+
+    private void CreateMetricCard(int index, string title, Color? accent, bool withProgress)
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill, Height = 96, Margin = new Padding(0, 0, 10, 0),
+            BackColor = UiTheme.Surface, Padding = new Padding(12), Tag = "card"
+        };
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4,
+            Margin = Padding.Empty, Padding = Padding.Empty, Tag = "card"
+        };
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 8));
-        content.Controls.Add(new Label { Text = title, Dock = DockStyle.Fill, AutoSize = false, ForeColor = UiTheme.Muted, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-        content.Controls.Add(new Label { Text = value, Dock = DockStyle.Fill, AutoSize = false, Font = new Font(Font.FontFamily, 18, FontStyle.Bold), ForeColor = accent ?? UiTheme.Text, TextAlign = ContentAlignment.MiddleLeft, Tag = accent is null ? null : "brand:metric-accent" }, 0, 1);
-        content.Controls.Add(new Label { Text = subtitle, Dock = DockStyle.Fill, AutoSize = false, ForeColor = UiTheme.Muted, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
-        if (progress is { } progressValue && accent is { } accentColor)
+
+        var titleLabel = new Label
         {
-            var track = new Panel
+            Text = title, Dock = DockStyle.Fill, AutoSize = false,
+            ForeColor = UiTheme.Muted, TextAlign = ContentAlignment.MiddleLeft
+        };
+        var valueLabel = new Label
+        {
+            Dock = DockStyle.Fill, AutoSize = false, Font = new Font(Font.FontFamily, 18, FontStyle.Bold),
+            ForeColor = accent ?? UiTheme.Text, TextAlign = ContentAlignment.MiddleLeft,
+            Tag = accent is null ? null : "brand:metric-accent"
+        };
+        var subtitleLabel = new Label
+        {
+            Dock = DockStyle.Fill, AutoSize = false, ForeColor = UiTheme.Muted,
+            AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft
+        };
+        content.Controls.Add(titleLabel, 0, 0);
+        content.Controls.Add(valueLabel, 0, 1);
+        content.Controls.Add(subtitleLabel, 0, 2);
+
+        Panel? track = null;
+        Panel? fill = null;
+        if (withProgress && accent is { } accentColor)
+        {
+            track = new Panel
             {
-                Dock = DockStyle.Fill, Height = 7, BackColor = currentTheme == ThemeMode.Dark ? Color.FromArgb(58, 72, 89) : Color.FromArgb(231, 237, 243),
+                Dock = DockStyle.Fill, Height = 7,
+                BackColor = currentTheme == ThemeMode.Dark ? Color.FromArgb(58, 72, 89) : Color.FromArgb(231, 237, 243),
                 Tag = "brand:metric-track"
             };
-            var fill = new Panel { Dock = DockStyle.Left, Width = 0, BackColor = accentColor, Tag = "brand:metric-fill" };
+            fill = new Panel { Dock = DockStyle.Left, Width = 0, BackColor = accentColor, Tag = "brand:metric-fill" };
             track.Controls.Add(fill);
-            void ResizeFill() => fill.Width = (int)Math.Round(track.ClientSize.Width * (double)Math.Clamp(progressValue, 0m, 100m) / 100d);
-            track.SizeChanged += (_, _) => ResizeFill();
-            ResizeFill();
+            var capturedIndex = index;
+            track.SizeChanged += (_, _) => ResizeMetricFill(capturedIndex);
             content.Controls.Add(track, 0, 3);
         }
+
         panel.Controls.Add(content);
-        return panel;
+        metricCards.Controls.Add(panel, index, 0);
+        metricViews.Titles[index] = titleLabel;
+        metricViews.Values[index] = valueLabel;
+        metricViews.Subtitles[index] = subtitleLabel;
+        metricViews.Tracks[index] = track;
+        metricViews.Fills[index] = fill;
+    }
+
+    private void UpdateMetricCard(int index, string value, string subtitle, Color? accent, decimal? progress)
+    {
+        metricViews.Values[index].Text = value;
+        metricViews.Values[index].ForeColor = accent ?? (currentTheme == ThemeMode.Dark
+            ? Color.FromArgb(230, 237, 245) : UiTheme.Text);
+        metricViews.Subtitles[index].Text = subtitle;
+        metricViews.Titles[index].ForeColor = currentTheme == ThemeMode.Dark
+            ? Color.FromArgb(165, 180, 197) : UiTheme.Muted;
+        metricViews.Subtitles[index].ForeColor = metricViews.Titles[index].ForeColor;
+        metricViews.Progress[index] = progress ?? 0m;
+        if (metricViews.Tracks[index] is { } track)
+        {
+            track.BackColor = currentTheme == ThemeMode.Dark
+                ? Color.FromArgb(58, 72, 89) : Color.FromArgb(231, 237, 243);
+            if (metricViews.Fills[index] is { } fill && accent is { } accentColor)
+                fill.BackColor = accentColor;
+            ResizeMetricFill(index);
+        }
+    }
+
+    private void ResizeMetricFill(int index)
+    {
+        if (metricViews.Tracks[index] is not { } track || metricViews.Fills[index] is not { } fill)
+            return;
+        fill.Width = (int)Math.Round(track.ClientSize.Width * (double)Math.Clamp(metricViews.Progress[index], 0m, 100m) / 100d);
     }
 
     private void RenderCalendar()
     {
         if (viewData is null) return;
-        calendar.SuspendLayout();
-        calendar.Controls.Clear();
+        EnsureCalendarCells();
+
         var mondayFirst = new[] { "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom" };
         var startsSunday = viewData.Data.Settings.CalendarWeekStartsOn == DayOfWeek.Sunday;
         var names = startsSunday ? new[] { "Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb" } : mondayFirst;
         for (var i = 0; i < names.Length; i++)
-            calendar.Controls.Add(new Label { Text = names[i], Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = UiTheme.Muted, Font = new Font(Font.FontFamily, 9, FontStyle.Bold) }, i, 0);
+        {
+            weekdayHeaders[i].Text = names[i];
+            weekdayHeaders[i].ForeColor = currentTheme == ThemeMode.Dark
+                ? Color.FromArgb(165, 180, 197) : UiTheme.Muted;
+        }
 
         var first = new DateOnly(month.Year, month.Month, 1);
         var weekStart = startsSunday ? DayOfWeek.Sunday : DayOfWeek.Monday;
         var offset = ((int)first.DayOfWeek - (int)weekStart + 7) % 7;
+        var emptyColor = currentTheme == ThemeMode.Dark ? Color.FromArgb(24, 36, 49) : Color.FromArgb(237, 242, 247);
+        var dayForeColor = currentTheme == ThemeMode.Dark ? Color.FromArgb(230, 237, 245) : UiTheme.Text;
+
         for (var index = 0; index < 42; index++)
         {
+            var button = dayButtons[index];
             var dayNumber = index - offset + 1;
             if (dayNumber < 1 || dayNumber > DateTime.DaysInMonth(month.Year, month.Month))
             {
-                calendar.Controls.Add(new Panel { Dock = DockStyle.Fill, Margin = new Padding(2), BackColor = currentTheme == ThemeMode.Dark ? Color.FromArgb(24, 36, 49) : Color.FromArgb(237, 242, 247) }, index % 7, index / 7 + 1);
+                button.Text = "";
+                button.Tag = null;
+                button.Enabled = false;
+                button.BackColor = emptyColor;
+                button.FlatAppearance.BorderSize = 0;
+                calendarTip.SetToolTip(button, string.Empty);
                 continue;
             }
+
             var date = new DateOnly(month.Year, month.Month, dayNumber);
             var day = viewData.Days[dayNumber - 1];
+            button.Enabled = true;
+            button.Text = $"{dayNumber}{Environment.NewLine}{DayTag(day.Outcome)}";
+            button.BackColor = DayColor(day.Outcome);
+            button.ForeColor = dayForeColor;
+            button.Tag = date;
+            var selected = selectedDates.Contains(date);
+            button.FlatAppearance.BorderSize = selected ? 2 : 1;
+            button.FlatAppearance.BorderColor = selected ? UiTheme.Blue : UiTheme.Border;
+            calendarTip.SetToolTip(button, day.Outcome.Reason + (day.Outcome.HolidayName is null ? "" : $": {day.Outcome.HolidayName}"));
+        }
+    }
+
+    private void EnsureCalendarCells()
+    {
+        if (calendarBuilt) return;
+        calendarBuilt = true;
+        calendar.SuspendLayout();
+        for (var i = 0; i < 7; i++)
+        {
+            weekdayHeaders[i] = new Label
+            {
+                Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = UiTheme.Muted, Font = weekdayFont
+            };
+            calendar.Controls.Add(weekdayHeaders[i], i, 0);
+        }
+
+        for (var index = 0; index < 42; index++)
+        {
             var button = new Button
             {
                 Dock = DockStyle.Fill,
@@ -458,22 +610,42 @@ public sealed class MainForm : Form
                 FlatStyle = FlatStyle.Flat,
                 TextAlign = ContentAlignment.TopLeft,
                 Padding = new Padding(7),
-                Font = new Font(Font.FontFamily, 9),
-                Text = $"{dayNumber}{Environment.NewLine}{DayTag(day.Outcome)}",
-                BackColor = DayColor(day.Outcome),
-                ForeColor = currentTheme == ThemeMode.Dark ? Color.FromArgb(230, 237, 245) : UiTheme.Text,
-                Tag = date
+                Font = dayCellFont,
+                UseVisualStyleBackColor = false
             };
-            button.FlatAppearance.BorderSize = selectedDates.Contains(date) ? 2 : 1;
-            button.FlatAppearance.BorderColor = selectedDates.Contains(date) ? UiTheme.Blue : UiTheme.Border;
-            var tip = new ToolTip();
-            tip.SetToolTip(button, day.Outcome.Reason + (day.Outcome.HolidayName is null ? "" : $": {day.Outcome.HolidayName}"));
-            button.Click += (_, e) => SelectDate(date, (ModifierKeys & Keys.Control) == Keys.Control, (ModifierKeys & Keys.Shift) == Keys.Shift);
-            button.MouseDoubleClick += (_, _) => ShowDayDetails(date);
+            button.Click += DayButton_Click;
+            button.MouseDoubleClick += DayButton_MouseDoubleClick;
+            dayButtons[index] = button;
             calendar.Controls.Add(button, index % 7, index / 7 + 1);
         }
-        calendar.ResumeLayout();
+        calendar.ResumeLayout(true);
     }
+
+    private void DayButton_Click(object? sender, EventArgs e)
+    {
+        if (sender is not Button { Tag: DateOnly date }) return;
+        SelectDate(date, (ModifierKeys & Keys.Control) == Keys.Control, (ModifierKeys & Keys.Shift) == Keys.Shift);
+    }
+
+    private void DayButton_MouseDoubleClick(object? sender, MouseEventArgs e)
+    {
+        if (sender is Button { Tag: DateOnly date })
+            ShowDayDetails(date);
+    }
+
+    private static void SetRedraw(Control control, bool enable)
+    {
+        if (!control.IsHandleCreated) return;
+        _ = SendMessage(control.Handle, WmSetRedraw, enable ? 1 : 0, 0);
+        if (enable)
+        {
+            control.Invalidate(true);
+            control.Update();
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
 
     private static string DayTag(DayOutcome outcome)
     {
@@ -643,6 +815,33 @@ public sealed class MainForm : Form
 
     private Task<int> RecordNewlyConfiguredNetworksAsync(IReadOnlyCollection<string> ssids) =>
         Task.FromResult(wlanMonitor.RecordCurrentConnectionsForNetworks(ssids, force: true));
+
+    private void ApplyWifiCheckInterval(int minutes)
+    {
+        var intervalMs = Math.Clamp(minutes, 1, 1440) * 60_000;
+        if (wifiCheckTimer.Interval == intervalMs) return;
+        wifiCheckTimer.Stop();
+        wifiCheckTimer.Interval = intervalMs;
+        wifiCheckTimer.Start();
+    }
+
+    private void CheckConnectedWifi()
+    {
+        if (viewData is null) return;
+        var configuredNetworks = viewData.Data.Networks
+            .Where(network => network.IsActive && network.CountsAsPresence)
+            .Select(network => network.Ssid)
+            .ToArray();
+        try
+        {
+            wlanMonitor.ObserveCurrentConnections();
+            wlanMonitor.RecordCurrentConnectionsForNetworks(configuredNetworks);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Não foi possível verificar a rede Wi-Fi conectada.");
+        }
+    }
     private void ShiftMonth(int amount)
     {
         month = month.AddMonths(amount);
@@ -694,7 +893,10 @@ public sealed class MainForm : Form
             trayIcon.ShowBalloonTip(1200, "Presence Tracker", "O monitoramento continua na bandeja.", ToolTipIcon.Info);
         }
         else
+        {
             refreshTimer.Stop();
+            wifiCheckTimer.Stop();
+        }
     }
 
     private static Button CreateButton(string text, EventHandler handler, int width)
@@ -724,10 +926,11 @@ public sealed class MainForm : Form
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            e.Graphics.Clear(Parent?.BackColor ?? SystemColors.Control);
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
             e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            using (var background = new SolidBrush(Parent?.BackColor ?? SystemColors.Control))
+                e.Graphics.FillRectangle(background, ClientRectangle);
             var bounds = new Rectangle(1, 1, Math.Max(1, Width - 3), Math.Max(1, Height - 3));
             var radius = Math.Min(9, Math.Max(4, Height / 4));
             using var path = new System.Drawing.Drawing2D.GraphicsPath();
@@ -762,10 +965,25 @@ public sealed class MainForm : Form
         if (disposing)
         {
             refreshTimer.Dispose();
+            wifiCheckTimer.Dispose();
+            calendarTip.Dispose();
+            weekdayFont.Dispose();
+            dayCellFont.Dispose();
             trayIcon.Visible = false;
             trayIcon.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    private sealed class MetricCardViews
+    {
+        public bool Built;
+        public readonly Label[] Titles = new Label[4];
+        public readonly Label[] Values = new Label[4];
+        public readonly Label[] Subtitles = new Label[4];
+        public readonly Panel?[] Tracks = new Panel?[4];
+        public readonly Panel?[] Fills = new Panel?[4];
+        public readonly decimal[] Progress = new decimal[4];
     }
 }
 

@@ -92,6 +92,8 @@ public sealed class TrackerService(ITrackerRepository repository, PresenceCalcul
             throw new ArgumentOutOfRangeException(nameof(settings.BackupRetentionCount), "A retenção deve ficar entre 1 e 365 backups.");
         if (settings.BackupIntervalHours is < 1 or > 720)
             throw new ArgumentOutOfRangeException(nameof(settings.BackupIntervalHours), "O intervalo deve ficar entre 1 e 720 horas.");
+        if (settings.WifiCheckIntervalMinutes is < 1 or > 1440)
+            throw new ArgumentOutOfRangeException(nameof(settings.WifiCheckIntervalMinutes), "O intervalo de verificação Wi-Fi deve ficar entre 1 e 1440 minutos.");
         return repository.UpdateSettingsAsync(settings, networks, cancellationToken, removedNetworkIds);
     }
 

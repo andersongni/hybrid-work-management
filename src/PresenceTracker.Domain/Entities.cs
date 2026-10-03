@@ -21,6 +21,7 @@ public sealed class TrackerSettings
     public ThemeMode Theme { get; set; } = ThemeMode.System;
     public int BackupRetentionCount { get; set; } = 30;
     public int BackupIntervalHours { get; set; } = 24;
+    public int WifiCheckIntervalMinutes { get; set; } = 10;
     public string BackupFolder { get; set; } = "";
     public string MinimumLogLevel { get; set; } = "Information";
 }

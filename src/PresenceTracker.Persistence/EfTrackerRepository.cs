@@ -148,6 +148,7 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
         current.Theme = settings.Theme;
         current.BackupRetentionCount = settings.BackupRetentionCount;
         current.BackupIntervalHours = settings.BackupIntervalHours;
+        current.WifiCheckIntervalMinutes = settings.WifiCheckIntervalMinutes;
         current.BackupFolder = settings.BackupFolder;
         current.MinimumLogLevel = settings.MinimumLogLevel;
         var existing = await db.PresenceNetworks.ToListAsync(cancellationToken);
