@@ -31,8 +31,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductName={#MyAppName}
-AppMutex={#MyAppMutex}
-CloseApplications=yes
+CloseApplications=force
 RestartApplications=no
 Uninstallable=yes
 MinVersion=10.0
@@ -64,10 +63,81 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Executar {#MyAppName} agora"; F
 var
   DataDirsPage: TInputDirWizardPage;
   IsUpgradeInstall: Boolean;
+  PreviousVersionInstalled: string;
+  PreviousInstallDir: string;
+  OneDriveRoot: string;
+  UseOneDriveDataFolders: Boolean;
 
 function InstallConfigPath: string;
 begin
   Result := ExpandConstant('{localappdata}\PresenceTracker\config\install.ini');
+end;
+
+function DefaultInstallDir: string;
+begin
+  Result := ExpandConstant('{localappdata}\Programs\{#MyAppName}');
+end;
+
+function DefaultLogsFolder: string;
+begin
+  Result := ExpandConstant('{localappdata}\PresenceTracker\logs');
+end;
+
+function DefaultBackupsFolder: string;
+begin
+  Result := ExpandConstant('{localappdata}\PresenceTracker\backups');
+end;
+
+function OneDriveAppRoot: string;
+begin
+  Result := AddBackslash(OneDriveRoot) + 'Presence Tracker';
+end;
+
+function OneDriveLogsFolder: string;
+begin
+  Result := AddBackslash(OneDriveAppRoot) + 'log';
+end;
+
+function OneDriveBackupsFolder: string;
+begin
+  Result := AddBackslash(OneDriveAppRoot) + 'backup';
+end;
+
+function FirstExistingDir(const Candidates: array of string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to GetArrayLength(Candidates) - 1 do
+  begin
+    if (Trim(Candidates[I]) <> '') and DirExists(Trim(Candidates[I])) then
+    begin
+      Result := Trim(Candidates[I]);
+      Exit;
+    end;
+  end;
+end;
+
+function ResolveOneDriveRoot: string;
+var
+  Candidate: string;
+  Candidates: array of string;
+begin
+  SetArrayLength(Candidates, 5);
+  Candidates[0] := GetEnv('OneDriveConsumer');
+  Candidates[1] := GetEnv('OneDrive');
+  Candidates[2] := GetEnv('OneDriveCommercial');
+
+  Candidate := '';
+  RegQueryStringValue(HKCU, 'Software\Microsoft\OneDrive\Accounts\Personal', 'UserFolder', Candidate);
+  Candidates[3] := Candidate;
+
+  Candidate := '';
+  if not RegQueryStringValue(HKCU, 'Software\Microsoft\OneDrive', 'UserFolder', Candidate) then
+    RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\OneDrive', 'UserFolder', Candidate);
+  Candidates[4] := Candidate;
+
+  Result := FirstExistingDir(Candidates);
 end;
 
 function QueryUninstallString(RootKey: Integer): string;
@@ -82,41 +152,159 @@ begin
   RegQueryStringValue(RootKey, '{#MyUninstallKey}', 'DisplayVersion', Result);
 end;
 
+function QueryInstallLocation(RootKey: Integer): string;
+begin
+  Result := '';
+  RegQueryStringValue(RootKey, '{#MyUninstallKey}', 'InstallLocation', Result);
+end;
+
+procedure ResolvePreviousInstallInfo;
+begin
+  PreviousVersionInstalled := QueryDisplayVersion(HKCU);
+  if PreviousVersionInstalled = '' then
+    PreviousVersionInstalled := QueryDisplayVersion(HKLM);
+  if PreviousVersionInstalled = '' then
+    PreviousVersionInstalled := 'desconhecida';
+
+  PreviousInstallDir := QueryInstallLocation(HKCU);
+  if PreviousInstallDir = '' then
+    PreviousInstallDir := QueryInstallLocation(HKLM);
+  if PreviousInstallDir = '' then
+    PreviousInstallDir := GetIniString('Install', 'InstallDir', DefaultInstallDir, InstallConfigPath);
+  if PreviousInstallDir = '' then
+    PreviousInstallDir := DefaultInstallDir;
+end;
+
 function DetectExistingInstall: Boolean;
 begin
-  Result := (QueryUninstallString(HKCU) <> '') or (QueryUninstallString(HKLM) <> '');
+  if (QueryUninstallString(HKCU) <> '') or (QueryUninstallString(HKLM) <> '') then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if FileExists(AddBackslash(DefaultInstallDir) + '{#MyAppExeName}') then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if FileExists(InstallConfigPath) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  Result := False;
+end;
+
+function IsAppRunning: Boolean;
+begin
+  Result := CheckForMutexes('{#MyAppMutex}');
+end;
+
+procedure CloseRunningApp;
+var
+  ResultCode: Integer;
+  Attempt: Integer;
+begin
+  if not IsAppRunning then
+    Exit;
+
+  { O app minimiza para a bandeja no WM_CLOSE; encerra o processo para liberar o EXE. }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#MyAppExeName} /T /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  for Attempt := 1 to 10 do
+  begin
+    if not IsAppRunning then
+      Exit;
+    Sleep(200);
+  end;
 end;
 
 function InitializeSetup(): Boolean;
-var
-  PreviousVersion: string;
 begin
   Result := True;
+  CloseRunningApp;
   IsUpgradeInstall := DetectExistingInstall;
   if IsUpgradeInstall then
-  begin
-    PreviousVersion := QueryDisplayVersion(HKCU);
-    if PreviousVersion = '' then
-      PreviousVersion := QueryDisplayVersion(HKLM);
-    if PreviousVersion = '' then
-      PreviousVersion := 'instalada';
+    ResolvePreviousInstallInfo;
+end;
 
-    if WizardSilent then
-      Exit;
+function PrepareToInstall(var NeedsRestart: Boolean): string;
+begin
+  NeedsRestart := False;
+  CloseRunningApp;
+  if IsAppRunning then
+    Result := 'Não foi possível encerrar o Presence Tracker automaticamente. Feche o aplicativo pela bandeja do sistema (Sair) e execute o instalador novamente.'
+  else
+    Result := '';
+end;
 
-    Result := MsgBox(
-      'Foi encontrada uma instalação existente do Presence Tracker (versão ' + PreviousVersion + ').' + #13#10 + #13#10 +
-      'O assistente irá atualizar para a versão {#MyAppVersion}, preservando seus dados, atalhos e configurações.' + #13#10 + #13#10 +
-      'Deseja continuar com a atualização?',
-      mbConfirmation,
-      MB_YESNO) = IDYES;
+procedure ApplyUpgradeCaptions(CurPageID: Integer);
+begin
+  if not IsUpgradeInstall then
+    Exit;
+
+  WizardForm.Caption := 'Atualização — Presence Tracker';
+
+  case CurPageID of
+    wpWelcome:
+      begin
+        WizardForm.WelcomeLabel1.Caption := 'Atualização do Presence Tracker';
+        WizardForm.WelcomeLabel2.Caption :=
+          'Já existe uma instalação do Presence Tracker neste computador.' + #13#10 + #13#10 +
+          'Versão instalada: ' + PreviousVersionInstalled + #13#10 +
+          'Versão deste pacote: {#MyAppVersion}' + #13#10 + #13#10 +
+          'Este assistente irá atualizar a instalação existente.' + #13#10 +
+          'Seu banco de dados, logs, backups e configurações serão preservados.' + #13#10 + #13#10 +
+          'Pasta atual: ' + PreviousInstallDir + #13#10 + #13#10 +
+          'Clique em Avançar para continuar.';
+      end;
+    wpSelectTasks:
+      begin
+        WizardForm.SelectTasksLabel.Caption :=
+          'Confirme as opções da atualização. As escolhas da instalação anterior foram mantidas quando possível.';
+      end;
+    wpReady:
+      begin
+        WizardForm.ReadyLabel.Caption :=
+          'Tudo pronto para atualizar o Presence Tracker.' + #13#10 + #13#10 +
+          'Os arquivos do programa serão substituídos. Seus dados não serão apagados.' + #13#10 + #13#10 +
+          'Clique em Atualizar para continuar.';
+        WizardForm.NextButton.Caption := 'Atualizar';
+      end;
+    wpInstalling:
+      begin
+        WizardForm.StatusLabel.Caption := 'Atualizando o Presence Tracker...';
+      end;
+    wpFinished:
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'Atualização concluída';
+        WizardForm.FinishedLabel.Caption :=
+          'O Presence Tracker foi atualizado com sucesso.' + #13#10 + #13#10 +
+          'Versão anterior: ' + PreviousVersionInstalled + #13#10 +
+          'Versão atual: {#MyAppVersion}' + #13#10 + #13#10 +
+          'Clique em Concluir para sair do assistente.';
+      end;
+  else
+    begin
+      if CurPageID = DataDirsPage.ID then
+      begin
+        DataDirsPage.Caption := 'Pastas de dados (atualização)';
+        DataDirsPage.Description := 'As pastas atuais serão mantidas, a menos que você as altere.';
+      end;
+    end;
   end;
 end;
 
 procedure InitializeWizard;
 var
-  ConfigPath, LogsFolder, BackupsFolder: string;
+  ConfigPath, LogsFolder, BackupsFolder, ExistingLogs, ExistingBackups: string;
 begin
+  UseOneDriveDataFolders := False;
+  OneDriveRoot := ResolveOneDriveRoot;
+
   DataDirsPage := CreateInputDirPage(
     wpSelectTasks,
     'Pastas de dados',
@@ -129,20 +317,99 @@ begin
   DataDirsPage.Add('Pasta de backups:');
 
   ConfigPath := InstallConfigPath;
-  LogsFolder := GetIniString('Install', 'LogsFolder', ExpandConstant('{localappdata}\PresenceTracker\logs'), ConfigPath);
-  BackupsFolder := GetIniString('Install', 'BackupsFolder', ExpandConstant('{localappdata}\PresenceTracker\backups'), ConfigPath);
+  ExistingLogs := GetIniString('Install', 'LogsFolder', '', ConfigPath);
+  ExistingBackups := GetIniString('Install', 'BackupsFolder', '', ConfigPath);
+
+  LogsFolder := ExistingLogs;
+  BackupsFolder := ExistingBackups;
+  if LogsFolder = '' then
+    LogsFolder := DefaultLogsFolder;
+  if BackupsFolder = '' then
+    BackupsFolder := DefaultBackupsFolder;
+
+  { Oferece OneDrive apenas em instalação nova sem pastas já configuradas. }
+  if (not IsUpgradeInstall) and (OneDriveRoot <> '') and (ExistingLogs = '') and (ExistingBackups = '') then
+  begin
+    if MsgBox(
+      'Detectamos o OneDrive neste computador:' + #13#10 +
+      OneDriveRoot + #13#10 + #13#10 +
+      'Deseja criar a pasta "Presence Tracker" no OneDrive, com as subpastas "log" e "backup", ' +
+      'e usá-las como padrão para logs e backups?' + #13#10 + #13#10 +
+      'Isso ajuda a sincronizar esses arquivos entre seus dispositivos.' + #13#10 + #13#10 +
+      'Você poderá alterar essas pastas depois, se preferir.',
+      mbConfirmation,
+      MB_YESNO) = IDYES then
+    begin
+      UseOneDriveDataFolders := True;
+      LogsFolder := OneDriveLogsFolder;
+      BackupsFolder := OneDriveBackupsFolder;
+      ForceDirectories(OneDriveAppRoot);
+      ForceDirectories(LogsFolder);
+      ForceDirectories(BackupsFolder);
+    end;
+  end;
+
   DataDirsPage.Values[0] := LogsFolder;
   DataDirsPage.Values[1] := BackupsFolder;
 
+  if UseOneDriveDataFolders then
+  begin
+    DataDirsPage.Caption := 'Pastas de dados (OneDrive)';
+    DataDirsPage.Description :=
+      'As pastas padrão foram definidas no OneDrive. Você pode confirmá-las ou escolher outros locais.';
+  end;
+
   if IsUpgradeInstall then
   begin
-    WizardForm.WelcomeLabel1.Caption := 'Atualização do Presence Tracker';
-    WizardForm.WelcomeLabel2.Caption :=
-      'Este assistente irá atualizar o Presence Tracker para a versão {#MyAppVersion}.' + #13#10 + #13#10 +
-      'A instalação existente será substituída pelos arquivos novos. Seu banco de dados, logs, backups e configurações serão preservados.';
-    WizardForm.FinishedLabel.Caption :=
-      'A atualização do Presence Tracker foi concluída.' + #13#10 + #13#10 +
-      'Você já pode usar a versão {#MyAppVersion}.';
+    WizardForm.Caption := 'Atualização — Presence Tracker';
+    ApplyUpgradeCaptions(wpWelcome);
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  ApplyUpgradeCaptions(CurPageID);
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  DataInfo: string;
+begin
+  DataInfo :=
+    'Pasta de logs:' + NewLine +
+    Space + DataDirsPage.Values[0] + NewLine + NewLine +
+    'Pasta de backups:' + NewLine +
+    Space + DataDirsPage.Values[1];
+  if UseOneDriveDataFolders then
+    DataInfo := DataInfo + NewLine + NewLine +
+      'Armazenamento de dados:' + NewLine +
+      Space + 'OneDrive (' + OneDriveAppRoot + ')';
+
+  if IsUpgradeInstall then
+  begin
+    Result :=
+      'Tipo de operação:' + NewLine +
+      Space + 'Atualização (instalação existente será mantida e os arquivos serão substituídos)' + NewLine + NewLine +
+      'Versão instalada:' + NewLine +
+      Space + PreviousVersionInstalled + NewLine + NewLine +
+      'Nova versão:' + NewLine +
+      Space + '{#MyAppVersion}' + NewLine + NewLine +
+      MemoDirInfo + NewLine + NewLine +
+      MemoGroupInfo;
+    if MemoTasksInfo <> '' then
+      Result := Result + NewLine + NewLine + MemoTasksInfo;
+  end
+  else
+  begin
+    Result :=
+      'Tipo de operação:' + NewLine +
+      Space + 'Nova instalação' + NewLine + NewLine +
+      MemoDirInfo + NewLine + NewLine +
+      MemoGroupInfo + NewLine + NewLine +
+      DataInfo;
+    if MemoTasksInfo <> '' then
+      Result := Result + NewLine + NewLine + MemoTasksInfo;
   end;
 end;
 
@@ -215,6 +482,12 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then
+  begin
+    CloseRunningApp;
+    if IsUpgradeInstall then
+      WizardForm.StatusLabel.Caption := 'Atualizando arquivos do Presence Tracker...';
+  end;
   if CurStep = ssPostInstall then
     WriteInstallConfig;
 end;
@@ -224,7 +497,10 @@ var
   DataRoot: string;
 begin
   if CurUninstallStep = usUninstall then
+  begin
+    CloseRunningApp;
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PresenceTracker');
+  end;
 
   if CurUninstallStep = usPostUninstall then
   begin

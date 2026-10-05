@@ -159,6 +159,7 @@ O instalador fica em `artifacts/installer/PresenceTracker-Setup.exe` e inclui:
 - **atualização automática** quando já existe uma instalação com o mesmo produto (mesmo `AppId`): reutiliza a pasta, preserva dados e substitui os arquivos
 - escolha da pasta de instalação e do grupo do Menu Iniciar (somente na primeira instalação)
 - personalização das pastas de **logs** e **backups** (na primeira instalação)
+- se o OneDrive estiver disponível, oferece criar `OneDrive\Presence Tracker\log` e `...\backup` como pastas padrão
 - atalho no Menu Iniciar e opção de atalho na área de trabalho
 - opção de **iniciar com o Windows**
 - desinstalador em Apps e Recursos e no Menu Iniciar
