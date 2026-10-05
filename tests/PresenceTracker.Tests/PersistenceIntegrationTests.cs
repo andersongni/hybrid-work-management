@@ -27,13 +27,18 @@ public sealed class PersistenceIntegrationTests
         Assert.Contains(await db.PresenceNetworks.ToListAsync(), n => n.Ssid == "CORP" && n.IsActive);
         Assert.Contains(await db.Holidays.ToListAsync(), h => h.Date == new DateOnly(2026, 7, 9) && h.Scope == HolidayScope.State);
 
+        var corp = await db.PresenceNetworks.SingleAsync(n => n.Ssid == "CORP");
+        corp.CountsAsPresence = true;
+        await db.SaveChangesAsync();
+
         var time = new DateTimeOffset(2026, 6, 1, 8, 0, 0, TimeSpan.FromHours(-3));
         await repository.RegisterNetworkChangeAsync(new NetworkChange(time, "wifi-1", "Wi-Fi", "corp", NetworkEventType.Connected));
         await repository.RegisterNetworkChangeAsync(new NetworkChange(time.AddMinutes(2), "wifi-1", "Wi-Fi", "CORP", NetworkEventType.Connected));
         await repository.RegisterNetworkChangeAsync(new NetworkChange(time.AddHours(1), "wifi-1", "Wi-Fi", "HOME", NetworkEventType.Connected));
         var month = await repository.LoadMonthAsync(2026, 6);
         Assert.Equal(3, month.NetworkEvents.Count);
-        Assert.Equal(2, month.AttendanceEvents.Count(e => e.Source == AttendanceSource.Automatic));
+        // CORP counts as presence; repeated same-day CORP connects do not create a second attendance.
+        Assert.Equal(1, month.AttendanceEvents.Count(e => e.Source == AttendanceSource.Automatic));
         Assert.Equal(1, new PresenceCalculator().CalculateMonth(2026, 6, new DateOnly(2026, 6, 1), 40m,
             month.Snapshot.WorkingDays, month.Holidays, month.Classifications, month.AttendanceEvents, month.Plans).RealizedDays);
 
