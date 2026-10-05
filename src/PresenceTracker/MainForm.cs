@@ -603,7 +603,7 @@ public sealed class MainForm : Form
 
         for (var index = 0; index < 42; index++)
         {
-            var button = new Button
+            var button = new CalendarDayButton
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(2),
@@ -614,7 +614,7 @@ public sealed class MainForm : Form
                 UseVisualStyleBackColor = false
             };
             button.Click += DayButton_Click;
-            button.MouseDoubleClick += DayButton_MouseDoubleClick;
+            button.DoubleClick += DayButton_DoubleClick;
             dayButtons[index] = button;
             calendar.Controls.Add(button, index % 7, index / 7 + 1);
         }
@@ -627,10 +627,19 @@ public sealed class MainForm : Form
         SelectDate(date, (ModifierKeys & Keys.Control) == Keys.Control, (ModifierKeys & Keys.Shift) == Keys.Shift);
     }
 
-    private void DayButton_MouseDoubleClick(object? sender, MouseEventArgs e)
+    private void DayButton_DoubleClick(object? sender, EventArgs e)
     {
         if (sender is Button { Tag: DateOnly date })
             ShowDayDetails(date);
+    }
+
+    private sealed class CalendarDayButton : Button
+    {
+        public CalendarDayButton()
+        {
+            // Button disables StandardDoubleClick by default, so DoubleClick never fires.
+            SetStyle(ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, true);
+        }
     }
 
     private static void SetRedraw(Control control, bool enable)

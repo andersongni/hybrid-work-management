@@ -3,6 +3,8 @@
 #define MyAppPublisher "Presence Tracker"
 #define MyAppExeName "PresenceTracker.exe"
 #define MyAppId "{{A7B73C31-0A27-4F6B-A6D8-C0CEB73E0C4D}"
+#define MyAppMutex "Local\PresenceTracker.Singleton"
+#define MyUninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppId}_is1"
 
 [Setup]
 AppId={#MyAppId}
@@ -12,8 +14,8 @@ AppPublisher={#MyAppPublisher}
 AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
-DisableProgramGroupPage=no
-DisableDirPage=no
+DisableProgramGroupPage=auto
+DisableDirPage=auto
 AllowNoIcons=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -29,10 +31,16 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductName={#MyAppName}
+AppMutex={#MyAppMutex}
 CloseApplications=yes
 RestartApplications=no
 Uninstallable=yes
 MinVersion=10.0
+UsePreviousAppDir=yes
+UsePreviousGroup=yes
+UsePreviousTasks=yes
+UsePreviousSetupType=yes
+UsePreviousLanguage=yes
 
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
@@ -55,13 +63,59 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Executar {#MyAppName} agora"; F
 [Code]
 var
   DataDirsPage: TInputDirWizardPage;
+  IsUpgradeInstall: Boolean;
 
 function InstallConfigPath: string;
 begin
   Result := ExpandConstant('{localappdata}\PresenceTracker\config\install.ini');
 end;
 
+function QueryUninstallString(RootKey: Integer): string;
+begin
+  Result := '';
+  RegQueryStringValue(RootKey, '{#MyUninstallKey}', 'UninstallString', Result);
+end;
+
+function QueryDisplayVersion(RootKey: Integer): string;
+begin
+  Result := '';
+  RegQueryStringValue(RootKey, '{#MyUninstallKey}', 'DisplayVersion', Result);
+end;
+
+function DetectExistingInstall: Boolean;
+begin
+  Result := (QueryUninstallString(HKCU) <> '') or (QueryUninstallString(HKLM) <> '');
+end;
+
+function InitializeSetup(): Boolean;
+var
+  PreviousVersion: string;
+begin
+  Result := True;
+  IsUpgradeInstall := DetectExistingInstall;
+  if IsUpgradeInstall then
+  begin
+    PreviousVersion := QueryDisplayVersion(HKCU);
+    if PreviousVersion = '' then
+      PreviousVersion := QueryDisplayVersion(HKLM);
+    if PreviousVersion = '' then
+      PreviousVersion := 'instalada';
+
+    if WizardSilent then
+      Exit;
+
+    Result := MsgBox(
+      'Foi encontrada uma instalação existente do Presence Tracker (versão ' + PreviousVersion + ').' + #13#10 + #13#10 +
+      'O assistente irá atualizar para a versão {#MyAppVersion}, preservando seus dados, atalhos e configurações.' + #13#10 + #13#10 +
+      'Deseja continuar com a atualização?',
+      mbConfirmation,
+      MB_YESNO) = IDYES;
+  end;
+end;
+
 procedure InitializeWizard;
+var
+  ConfigPath, LogsFolder, BackupsFolder: string;
 begin
   DataDirsPage := CreateInputDirPage(
     wpSelectTasks,
@@ -73,8 +127,31 @@ begin
     '');
   DataDirsPage.Add('Pasta de logs:');
   DataDirsPage.Add('Pasta de backups:');
-  DataDirsPage.Values[0] := ExpandConstant('{localappdata}\PresenceTracker\logs');
-  DataDirsPage.Values[1] := ExpandConstant('{localappdata}\PresenceTracker\backups');
+
+  ConfigPath := InstallConfigPath;
+  LogsFolder := GetIniString('Install', 'LogsFolder', ExpandConstant('{localappdata}\PresenceTracker\logs'), ConfigPath);
+  BackupsFolder := GetIniString('Install', 'BackupsFolder', ExpandConstant('{localappdata}\PresenceTracker\backups'), ConfigPath);
+  DataDirsPage.Values[0] := LogsFolder;
+  DataDirsPage.Values[1] := BackupsFolder;
+
+  if IsUpgradeInstall then
+  begin
+    WizardForm.WelcomeLabel1.Caption := 'Atualização do Presence Tracker';
+    WizardForm.WelcomeLabel2.Caption :=
+      'Este assistente irá atualizar o Presence Tracker para a versão {#MyAppVersion}.' + #13#10 + #13#10 +
+      'A instalação existente será substituída pelos arquivos novos. Seu banco de dados, logs, backups e configurações serão preservados.';
+    WizardForm.FinishedLabel.Caption :=
+      'A atualização do Presence Tracker foi concluída.' + #13#10 + #13#10 +
+      'Você já pode usar a versão {#MyAppVersion}.';
+  end;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  { Em atualização, mantém as pastas de dados já configuradas. }
+  if IsUpgradeInstall and (PageID = DataDirsPage.ID) then
+    Result := True;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -112,6 +189,15 @@ var
 begin
   ConfigPath := InstallConfigPath;
   ForceDirectories(ExtractFileDir(ConfigPath));
+
+  if IsUpgradeInstall then
+  begin
+    { Atualização: só sincroniza o diretório do app; não reaplica defaults que sobrescreveriam preferências. }
+    SetIniString('Install', 'InstallDir', ExpandConstant('{app}'), ConfigPath);
+    SetIniString('Install', 'ApplyDefaults', '0', ConfigPath);
+    Exit;
+  end;
+
   ForceDirectories(DataDirsPage.Values[0]);
   ForceDirectories(DataDirsPage.Values[1]);
 
