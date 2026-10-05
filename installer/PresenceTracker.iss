@@ -10,12 +10,12 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppVerName={#MyAppName} {#MyAppVersion}
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=no
 DisableDirPage=no
 AllowNoIcons=yes
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\artifacts\installer
@@ -33,7 +33,6 @@ CloseApplications=yes
 RestartApplications=no
 Uninstallable=yes
 MinVersion=10.0
-UsedUserAreasWarning=no
 
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
@@ -68,7 +67,7 @@ begin
     wpSelectTasks,
     'Pastas de dados',
     'Escolha onde o Presence Tracker deve guardar logs e backups.',
-    'Os arquivos do programa serão instalados na pasta escolhida (por padrão, Arquivos de Programas).' + #13#10 +
+    'Os arquivos do programa serão instalados na pasta escolhida (por padrão, na pasta do usuário, sem precisar de administrador).' + #13#10 +
     'Os dados do usuário podem ficar em pastas separadas, que você pode alterar depois nas configurações do aplicativo.',
     False,
     '');

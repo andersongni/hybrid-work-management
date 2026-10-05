@@ -155,7 +155,7 @@ powershell -File installer/build.ps1
 
 O instalador fica em `artifacts/installer/PresenceTracker-Setup.exe` e inclui:
 
-- instalação em **Arquivos de Programas** (com elevação de administrador)
+- instalação por usuário em `%LOCALAPPDATA%\Programs\Presence Tracker` (sem elevação de administrador)
 - escolha da pasta de instalação e do grupo do Menu Iniciar
 - personalização das pastas de **logs** e **backups**
 - atalho no Menu Iniciar e opção de atalho na área de trabalho
