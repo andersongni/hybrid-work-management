@@ -76,6 +76,27 @@ public static class AppDataPaths
         WriteIniValue(InstallConfigFile, "Install", "ApplyDefaults", "0");
     }
 
+    public static void SetLogsFolder(string? folder)
+    {
+        lock (Sync)
+        {
+            EnsureInstallConfigLoadedUnlocked();
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                logsOverride = null;
+                WriteIniValue(InstallConfigFile, "Install", "LogsFolder", Path.Combine(Root, "logs"));
+            }
+            else
+            {
+                logsOverride = Path.GetFullPath(folder.Trim());
+                Directory.CreateDirectory(logsOverride);
+                WriteIniValue(InstallConfigFile, "Install", "LogsFolder", logsOverride);
+            }
+
+            loaded = true;
+        }
+    }
+
     private static void EnsureInstallConfigLoaded()
     {
         if (loaded)
@@ -86,24 +107,28 @@ public static class AppDataPaths
             if (loaded)
                 return;
 
-            try
-            {
-                if (File.Exists(InstallConfigFile))
-                {
-                    var values = ReadIniSection(InstallConfigFile, "Install");
-                    if (values.TryGetValue("LogsFolder", out var logsFolder) && !string.IsNullOrWhiteSpace(logsFolder))
-                        logsOverride = Path.GetFullPath(logsFolder.Trim());
-                    if (values.TryGetValue("BackupsFolder", out var backupsFolder) && !string.IsNullOrWhiteSpace(backupsFolder))
-                        backupsOverride = Path.GetFullPath(backupsFolder.Trim());
-                }
-            }
-            catch
-            {
-                logsOverride = null;
-                backupsOverride = null;
-            }
-
+            EnsureInstallConfigLoadedUnlocked();
             loaded = true;
+        }
+    }
+
+    private static void EnsureInstallConfigLoadedUnlocked()
+    {
+        try
+        {
+            if (!File.Exists(InstallConfigFile))
+                return;
+
+            var values = ReadIniSection(InstallConfigFile, "Install");
+            if (values.TryGetValue("LogsFolder", out var logsFolder) && !string.IsNullOrWhiteSpace(logsFolder))
+                logsOverride = Path.GetFullPath(logsFolder.Trim());
+            if (values.TryGetValue("BackupsFolder", out var backupsFolder) && !string.IsNullOrWhiteSpace(backupsFolder))
+                backupsOverride = Path.GetFullPath(backupsFolder.Trim());
+        }
+        catch
+        {
+            logsOverride = null;
+            backupsOverride = null;
         }
     }
 

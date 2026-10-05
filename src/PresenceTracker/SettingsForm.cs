@@ -24,6 +24,7 @@ internal sealed class SettingsForm : Form
     private readonly NumericUpDown backupInterval = new();
     private readonly NumericUpDown wifiCheckInterval = new();
     private readonly TextBox backupFolder = new() { ReadOnly = true };
+    private readonly TextBox logsFolder = new() { ReadOnly = true };
     private readonly CheckBox startup = new();
     private readonly CheckBox minimize = new();
     private readonly ComboBox theme = new();
@@ -34,6 +35,7 @@ internal sealed class SettingsForm : Form
     private bool saveInProgress;
     private bool savePending;
     private bool selectingBackupFolder;
+    private bool selectingLogsFolder;
 
     public SettingsForm(TrackerService tracker, TrackerSettings settings,
         IReadOnlyList<PresenceNetwork> networks, IDatabaseBackupService backup, ILogger logger,
@@ -229,7 +231,7 @@ internal sealed class SettingsForm : Form
         tabs.TabPages.Add(backupPage);
 
         var developerPage = new TabPage("Desenvolvedor");
-        var developerGrid = SettingsGrid(2);
+        var developerGrid = SettingsGrid(3);
         var developerScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
         developerPage.Controls.Add(developerScroll);
         developerScroll.Controls.Add(developerGrid);
@@ -237,17 +239,25 @@ internal sealed class SettingsForm : Form
         logLevel.Items.AddRange(new object[] { "Debug", "Information", "Warning", "Error" });
         logLevel.SelectedItem = settings.MinimumLogLevel;
         AddSettingRow(developerGrid, 0, "Nível de log", logLevel);
+        logsFolder.Text = AppDataPaths.Logs;
+        var logsFolderEditor = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Height = 38, Margin = Padding.Empty };
+        logsFolderEditor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        logsFolderEditor.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        logsFolder.Dock = DockStyle.Fill;
+        logsFolderEditor.Controls.Add(logsFolder, 0, 0);
+        logsFolderEditor.Controls.Add(Button("Escolher…", (_, _) => ChooseLogsFolder()), 1, 0);
+        AddSettingRow(developerGrid, 1, "Pasta de logs", logsFolderEditor);
         var factoryRestoreButton = Button("Restaurar configurações de fábrica", async (_, _) => await RestoreFactoryDefaultsAsync(backup));
         factoryRestoreButton.Dock = DockStyle.Fill;
         factoryRestoreButton.AutoSize = false;
-        developerGrid.Controls.Add(factoryRestoreButton, 0, 1);
+        developerGrid.Controls.Add(factoryRestoreButton, 0, 2);
         developerGrid.SetColumnSpan(factoryRestoreButton, 2);
         var developerActions = new FlowLayoutPanel
         {
             Dock = DockStyle.Top, AutoSize = true, WrapContents = true,
             Padding = new Padding(14, 6, 14, 6), Margin = Padding.Empty
         };
-        developerActions.Controls.Add(Button("Abrir logs", (_, _) => OpenFolder(AppDataPaths.Logs)));
+        developerActions.Controls.Add(Button("Abrir logs", (_, _) => OpenFolder(GetLogsDirectory())));
         developerPage.Controls.Add(developerActions);
         tabs.TabPages.Add(developerPage);
 
@@ -358,9 +368,12 @@ internal sealed class SettingsForm : Form
             var cleanNetworks = networks.Where(n => !string.IsNullOrWhiteSpace(n.Ssid)).ToArray();
             var qualifyingNetworks = GetQualifyingNetworkNames(cleanNetworks);
             var newlyConfiguredNetworks = qualifyingNetworks.Except(savedQualifyingNetworks, StringComparer.OrdinalIgnoreCase).ToArray();
+            var previousLogsFolder = AppDataPaths.Logs;
+            var nextLogsFolder = GetLogsDirectory();
             await tracker.UpdateSettingsAsync(settings, cleanNetworks, removedNetworkIds: removedNetworkIds);
             WindowsStartup.SetEnabled(settings.StartWithWindows);
             AppLogging.SetMinimumLevel(settings.MinimumLogLevel);
+            AppDataPaths.SetLogsFolder(nextLogsFolder);
             savedQualifyingNetworks.Clear();
             savedQualifyingNetworks.UnionWith(qualifyingNetworks);
 
@@ -376,9 +389,13 @@ internal sealed class SettingsForm : Form
                     logger.LogWarning(exception, "Não foi possível consultar conexões WLAN ao cadastrar uma rede presencial.");
                 }
             }
+
+            var logsMoved = !string.Equals(Path.GetFullPath(previousLogsFolder), Path.GetFullPath(nextLogsFolder), StringComparison.OrdinalIgnoreCase);
             saveStatus.Text = connectedMatches > 0
                 ? $"Salvo às {DateTime.Now:HH:mm:ss}. Presença da rede conectada registrada."
-                : $"Salvo às {DateTime.Now:HH:mm:ss}.";
+                : logsMoved
+                    ? $"Salvo às {DateTime.Now:HH:mm:ss}. Reinicie o app para gravar novos logs na pasta escolhida."
+                    : $"Salvo às {DateTime.Now:HH:mm:ss}.";
         }
         catch (Exception exception)
         {
@@ -403,6 +420,9 @@ internal sealed class SettingsForm : Form
 
     private string GetBackupDirectory() => Path.GetFullPath(string.IsNullOrWhiteSpace(backupFolder.Text)
         ? AppDataPaths.Backups : backupFolder.Text.Trim());
+
+    private string GetLogsDirectory() => Path.GetFullPath(string.IsNullOrWhiteSpace(logsFolder.Text)
+        ? AppDataPaths.Logs : logsFolder.Text.Trim());
 
     private async void ChooseBackupFolder()
     {
@@ -429,6 +449,36 @@ internal sealed class SettingsForm : Form
         finally
         {
             selectingBackupFolder = false;
+            if (!IsDisposed && saveStatus.Text == "Abrindo seletor de pasta…")
+                saveStatus.Text = "Todas as alterações são salvas automaticamente.";
+        }
+    }
+
+    private async void ChooseLogsFolder()
+    {
+        if (selectingLogsFolder) return;
+        selectingLogsFolder = true;
+        saveStatus.Text = "Abrindo seletor de pasta…";
+        try
+        {
+            var selectedPath = await ShowFolderDialogOnStaThreadAsync(
+                Directory.Exists(logsFolder.Text) ? logsFolder.Text : AppDataPaths.Logs);
+            if (selectedPath is not null && !IsDisposed)
+            {
+                logsFolder.Text = selectedPath;
+                QueueSave();
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "O seletor do Windows não conseguiu abrir a pasta de logs.");
+            if (!IsDisposed)
+                MessageBox.Show(this, "Não foi possível abrir o seletor de pastas. Tente novamente ou reinicie o Presence Tracker.",
+                    "Pasta de logs", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            selectingLogsFolder = false;
             if (!IsDisposed && saveStatus.Text == "Abrindo seletor de pasta…")
                 saveStatus.Text = "Todas as alterações são salvas automaticamente.";
         }

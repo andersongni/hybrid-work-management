@@ -46,7 +46,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na área de trabalho"; GroupDescription: "Atalhos adicionais:"; Flags: unchecked
-Name: "autostart"; Description: "Iniciar automaticamente com o Windows"; GroupDescription: "Inicialização:"; Flags: checkedonce
+Name: "autostart"; Description: "Iniciar automaticamente com o Windows"; GroupDescription: "Inicialização:"
 
 [Files]
 Source: "..\artifacts\publish\win-x64\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -369,6 +369,9 @@ end;
 procedure CurPageChanged(CurPageID: Integer);
 begin
   ApplyUpgradeCaptions(CurPageID);
+  { Sempre marcar inicialização com o Windows como padrão visível. }
+  if CurPageID = wpSelectTasks then
+    WizardSelectTasks('autostart');
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
@@ -490,6 +493,22 @@ begin
   end;
   if CurStep = ssPostInstall then
     WriteInstallConfig;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  CloseRunningApp;
+  if IsAppRunning then
+  begin
+    MsgBox(
+      'Não foi possível encerrar o Presence Tracker automaticamente.' + #13#10 + #13#10 +
+      'Feche o aplicativo pela bandeja do sistema (Sair) e execute a desinstalação novamente.',
+      mbError,
+      MB_OK);
+    Result := False;
+  end
+  else
+    Result := True;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
