@@ -130,29 +130,47 @@ Configurações relevantes na UI:
 - **Configurações → Backup**: pasta, retenção e intervalo de backup
 - **Configurações → Datas**: dias úteis, início da semana e feriados
 
-## Publicando e gerando o instalador
+## Publicando: portable vs instalador
 
-Publicação release (self-contained, single-file):
+Há dois entregáveis distintos:
+
+| Entregável | Como gerar | O que é |
+| --- | --- | --- |
+| **Portable** | `dotnet publish ... -o artifacts/portable` | EXE único, sem wizard. Basta copiar e executar. |
+| **Instalador** | `powershell -File installer/build.ps1` | `PresenceTracker-Setup.exe` com wizard Inno Setup. |
+
+### Versão portable
 
 ~~~powershell
-dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/publish/win-x64
+dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/portable
 ~~~
 
-Com o Inno Setup instalado:
+### Instalador com wizard
+
+Requer [Inno Setup 6](https://jrsoftware.org/isinfo.php). O script `installer/build.ps1` publica o app e compila o setup:
 
 ~~~powershell
 powershell -File installer/build.ps1
 ~~~
 
-O instalador fica em `artifacts/installer/`.
+O instalador fica em `artifacts/installer/PresenceTracker-Setup.exe` e inclui:
+
+- instalação em **Arquivos de Programas** (com elevação de administrador)
+- escolha da pasta de instalação e do grupo do Menu Iniciar
+- personalização das pastas de **logs** e **backups**
+- atalho no Menu Iniciar e opção de atalho na área de trabalho
+- opção de **iniciar com o Windows**
+- desinstalador em Apps e Recursos e no Menu Iniciar
 
 ## Organização de dados locais
 
 ~~~text
 %LOCALAPPDATA%\PresenceTracker\
 ├── presence.db
-├── backups\
-├── logs\
+├── backups\          (padrão; pode ser personalizado no instalador ou nas Configurações)
+├── logs\             (padrão; pode ser personalizado no instalador)
+├── config\
+│   └── install.ini   (gerado pelo instalador)
 └── ...
 ~~~
 

@@ -46,6 +46,7 @@ internal static class Program
         try
         {
             await tracker.InitializeAsync();
+            await ApplyInstallDefaultsAsync(tracker);
             var initial = await tracker.GetMonthAsync(DateTime.Today.Year, DateTime.Today.Month, DateOnly.FromDateTime(DateTime.Today));
             AppLogging.SetMinimumLevel(initial.Data.Settings.MinimumLogLevel);
             WindowsStartup.SetEnabled(initial.Data.Settings.StartWithWindows);
@@ -138,6 +139,22 @@ internal static class Program
             await host.StopAsync();
             Log.CloseAndFlush();
         }
+    }
+
+    private static async Task ApplyInstallDefaultsAsync(TrackerService tracker)
+    {
+        var defaults = AppDataPaths.ReadInstallDefaults();
+        if (defaults is null || !defaults.ApplyDefaults)
+            return;
+
+        var month = await tracker.GetMonthAsync(DateTime.Today.Year, DateTime.Today.Month, DateOnly.FromDateTime(DateTime.Today));
+        var settings = month.Data.Settings;
+        settings.StartWithWindows = defaults.StartWithWindows;
+        if (!string.IsNullOrWhiteSpace(defaults.BackupsFolder))
+            settings.BackupFolder = defaults.BackupsFolder;
+
+        await tracker.UpdateSettingsAsync(settings, month.Data.Networks);
+        AppDataPaths.MarkInstallDefaultsApplied();
     }
 }
 

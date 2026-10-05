@@ -24,17 +24,46 @@ jobs:
       - name: Build project
         run: dotnet build -c Release --no-restore PresenceTracker.sln
 
-      - name: Publish Installer
-        run: dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/publish/win-x64
+      - name: Test
+        run: dotnet test -c Release --no-build PresenceTracker.sln
+
+      - name: Publish for installer
+        run: >
+          dotnet publish src/PresenceTracker/PresenceTracker.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o artifacts/publish/win-x64
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+            "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe não encontrado após a instalação do Inno Setup.' }
+          New-Item -ItemType Directory -Force artifacts/installer | Out-Null
+          & $iscc installer/PresenceTracker.iss
+          if ($LASTEXITCODE -ne 0) { throw "Falha ao compilar o instalador (código $LASTEXITCODE)." }
 
       - name: Create Portable Version
-        run: dotnet publish src/PresenceTracker/PresenceTracker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/portable
+        run: >
+          dotnet publish src/PresenceTracker/PresenceTracker.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o artifacts/portable
 
       - name: Upload Installer
         uses: actions/upload-artifact@v6
         with:
           name: PresenceTracker-Installer
-          path: artifacts/publish/win-x64/*
+          path: artifacts/installer/PresenceTracker-Setup.exe
 
       - name: Upload Portable Version
         uses: actions/upload-artifact@v6
