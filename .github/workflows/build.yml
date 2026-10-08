@@ -54,22 +54,9 @@ jobs:
           & $iscc installer/PresenceTracker.iss
           if ($LASTEXITCODE -ne 0) { throw "Falha ao compilar o instalador (código $LASTEXITCODE)." }
 
-      - name: Create Portable Version
-        run: >
-          dotnet publish src/PresenceTracker/PresenceTracker.csproj
-          -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -o artifacts/portable
-
       - name: Upload Installer
         uses: actions/upload-artifact@v6
         with:
           name: PresenceTracker-Installer
           path: artifacts/installer/PresenceTracker-Setup.exe
-
-      - name: Upload Portable Version
-        uses: actions/upload-artifact@v6
-        with:
-          name: PresenceTracker-Portable
-          path: artifacts/portable/*
+          if-no-files-found: error
