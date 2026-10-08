@@ -47,6 +47,7 @@ public sealed class MainForm : Form
     private ThemeMode? appliedTheme;
     private bool calendarBuilt;
     private int refreshVersion;
+    private bool allowVisible = true;
 
     public MainForm(TrackerService tracker, WlanMonitor wlanMonitor,
         IDatabaseBackupService backup, ILogger<MainForm> logger)
@@ -89,6 +90,27 @@ public sealed class MainForm : Form
         wifiCheckTimer.Start();
         Load += async (_, _) => await RefreshMonthAsync();
         FormClosing += OnFormClosing;
+    }
+
+    public void ConfigureStartupVisibility(bool hidden)
+    {
+        allowVisible = !hidden;
+        if (hidden)
+        {
+            ShowInTaskbar = false;
+            WindowState = FormWindowState.Minimized;
+        }
+    }
+
+    protected override void SetVisibleCore(bool value)
+    {
+        if (!allowVisible)
+        {
+            if (!IsHandleCreated)
+                CreateHandle();
+            value = false;
+        }
+        base.SetVisibleCore(value);
     }
 
     private void BuildLayout()
@@ -886,6 +908,7 @@ public sealed class MainForm : Form
 
     private void ShowWindow()
     {
+        allowVisible = true;
         Show();
         ShowInTaskbar = true;
         WindowState = FormWindowState.Normal;

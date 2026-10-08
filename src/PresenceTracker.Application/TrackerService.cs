@@ -37,6 +37,7 @@ public interface ITrackerRepository
     Task RefreshAfterRestoreAsync(CancellationToken cancellationToken = default);
     Task ResetToFactoryDefaultsAsync(CancellationToken cancellationToken = default);
     Task RegisterNetworkChangeAsync(NetworkChange change, CancellationToken cancellationToken = default);
+    Task ClearPlansBeforeAsync(DateOnly today, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Holiday>> GetHolidaysAsync(int year, CancellationToken cancellationToken = default);
     Task SaveHolidayAsync(Holiday holiday, CancellationToken cancellationToken = default);
     Task DeleteHolidayAsync(int holidayId, CancellationToken cancellationToken = default);
@@ -54,6 +55,7 @@ public sealed class TrackerService(ITrackerRepository repository, PresenceCalcul
 
     public async Task<MonthViewData> GetMonthAsync(int year, int month, DateOnly today, CancellationToken cancellationToken = default)
     {
+        await repository.ClearPlansBeforeAsync(today, cancellationToken);
         var data = await repository.LoadMonthAsync(year, month, cancellationToken);
         var metrics = calculator.CalculateMonth(year, month, today, data.Snapshot.TargetPercent,
             data.Snapshot.WorkingDays, data.Holidays, data.Classifications, data.AttendanceEvents, data.Plans);
@@ -66,7 +68,7 @@ public sealed class TrackerService(ITrackerRepository repository, PresenceCalcul
             var classification = data.Classifications.FirstOrDefault(c => c.Date == date);
             var attendance = data.AttendanceEvents.Where(e => e.Date == date).ToArray();
             var networkEvents = data.NetworkEvents.Where(e => e.Date == date).OrderBy(e => e.OccurredAt).ToArray();
-            var planned = data.Plans.Any(p => p.Date == date);
+            var planned = date >= today && data.Plans.Any(p => p.Date == date);
             var outcome = calculator.EvaluateDay(date, data.Snapshot.WorkingDays, holiday,
                 classification, attendance, planned);
             days.Add(new DayViewData(outcome, attendance, networkEvents));

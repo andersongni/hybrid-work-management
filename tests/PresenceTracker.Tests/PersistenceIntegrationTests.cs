@@ -95,5 +95,41 @@ public sealed class PersistenceIntegrationTests
         db.ChangeTracker.Clear();
         Assert.Equal(15, (await db.Settings.SingleAsync()).WifiCheckIntervalMinutes);
     }
+
+    [Fact]
+    public async Task PastPlansAreClearedAndCannotBeCreated()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<TrackerDbContext>().UseSqlite(connection).Options;
+        await using var db = new TrackerDbContext(options);
+        var repository = new EfTrackerRepository(db, new LocalHolidayProvider());
+        await repository.InitializeAsync();
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var past = today.AddDays(-1);
+        var future = today.AddDays(1);
+        db.Plans.AddRange(
+            new PresencePlan { Date = past, CreatedAt = DateTimeOffset.Now },
+            new PresencePlan { Date = today, CreatedAt = DateTimeOffset.Now },
+            new PresencePlan { Date = future, CreatedAt = DateTimeOffset.Now });
+        await db.SaveChangesAsync();
+
+        await repository.ClearPlansBeforeAsync(today);
+        db.ChangeTracker.Clear();
+        var remaining = await db.Plans.AsNoTracking().Select(plan => plan.Date).ToListAsync();
+        Assert.DoesNotContain(past, remaining);
+        Assert.Contains(today, remaining);
+        Assert.Contains(future, remaining);
+
+        await repository.ApplyBatchAsync([past], BatchAction.PlanPresence);
+        db.ChangeTracker.Clear();
+        Assert.DoesNotContain(await db.Plans.AsNoTracking().Select(plan => plan.Date).ToListAsync(), date => date == past);
+
+        var service = new TrackerService(repository, new PresenceCalculator());
+        var month = await service.GetMonthAsync(past.Year, past.Month, today);
+        var pastDay = month.Days.First(day => day.Outcome.Date == past);
+        Assert.False(pastDay.Outcome.IsPlanned);
+    }
 }
 

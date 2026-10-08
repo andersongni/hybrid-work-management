@@ -86,9 +86,17 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
                     if (plan is not null) db.Plans.Remove(plan);
                     break;
                 case BatchAction.PlanPresence:
+                {
+                    var today = DateOnly.FromDateTime(DateTime.Today);
+                    if (date < today)
+                    {
+                        if (plan is not null) db.Plans.Remove(plan);
+                        break;
+                    }
                     if (classification is null && plan is null)
                         db.Plans.Add(new PresencePlan { Date = date, CreatedAt = DateTimeOffset.Now });
                     break;
+                }
                 case BatchAction.RestoreDefaults:
                 {
                     if (plan is not null) db.Plans.Remove(plan);
@@ -205,6 +213,9 @@ public sealed class EfTrackerRepository(TrackerDbContext db, IHolidayProvider lo
         await transaction.CommitAsync(cancellationToken);
         return current;
     }
+
+    public async Task ClearPlansBeforeAsync(DateOnly today, CancellationToken cancellationToken = default) =>
+        await db.Plans.Where(plan => plan.Date < today).ExecuteDeleteAsync(cancellationToken);
 
     public async Task RegisterNetworkChangeAsync(NetworkChange change, CancellationToken cancellationToken = default)
     {

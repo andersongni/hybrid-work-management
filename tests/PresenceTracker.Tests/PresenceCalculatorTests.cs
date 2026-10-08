@@ -131,6 +131,19 @@ public sealed class PresenceCalculatorTests
     }
 
     [Fact]
+    public void PastPlansDoNotCountTowardProjection()
+    {
+        var plans = new[]
+        {
+            new PresencePlan { Date = D(2026, 6, 1) },
+            new PresencePlan { Date = D(2026, 6, 3) }
+        };
+        var result = calculator.CalculateMonth(2026, 6, D(2026, 6, 2), 40m, WorkingDays.Weekdays,
+            NoHolidays, NoClassifications, NoAttendance, plans);
+        Assert.Equal(1, result.PlannedDays);
+    }
+
+    [Fact]
     public void NonWorkdaysAndExclusionsAffectMonthAndYearBoundaries()
     {
         var date = D(2026, 12, 31);

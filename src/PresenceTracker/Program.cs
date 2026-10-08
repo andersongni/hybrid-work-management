@@ -71,6 +71,7 @@ internal static class Program
             }
             using var stop = new CancellationTokenSource();
             var form = uiScope.ServiceProvider.GetRequiredService<MainForm>();
+            form.ConfigureStartupVisibility(WindowsStartup.IsAutostartLaunch());
             var syncTask = Task.Run(async () =>
             {
                 foreach (var year in new[] { DateTime.Today.Year, DateTime.Today.Year + 1 })
