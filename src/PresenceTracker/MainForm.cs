@@ -635,7 +635,8 @@ public sealed class MainForm : Form
                 Font = dayCellFont,
                 UseVisualStyleBackColor = false
             };
-            button.Click += DayButton_Click;
+            // Sample modifiers on MouseDown: Click fires on mouse-up, when Ctrl is often already released.
+            button.MouseDown += DayButton_MouseDown;
             button.DoubleClick += DayButton_DoubleClick;
             dayButtons[index] = button;
             calendar.Controls.Add(button, index % 7, index / 7 + 1);
@@ -643,10 +644,14 @@ public sealed class MainForm : Form
         calendar.ResumeLayout(true);
     }
 
-    private void DayButton_Click(object? sender, EventArgs e)
+    private void DayButton_MouseDown(object? sender, MouseEventArgs e)
     {
+        if (e.Button != MouseButtons.Left) return;
         if (sender is not Button { Tag: DateOnly date }) return;
-        SelectDate(date, (ModifierKeys & Keys.Control) == Keys.Control, (ModifierKeys & Keys.Shift) == Keys.Shift);
+        var modifiers = ModifierKeys;
+        SelectDate(date,
+            (modifiers & Keys.Control) == Keys.Control,
+            (modifiers & Keys.Shift) == Keys.Shift);
     }
 
     private void DayButton_DoubleClick(object? sender, EventArgs e)
@@ -708,25 +713,7 @@ public sealed class MainForm : Form
 
     private void SelectDate(DateOnly date, bool control, bool shift)
     {
-        if (shift && selectionAnchor is { } anchor)
-        {
-            selectedDates.Clear();
-            var first = anchor < date ? anchor : date;
-            var last = anchor > date ? anchor : date;
-            for (var current = first; current <= last; current = current.AddDays(1))
-                selectedDates.Add(current);
-        }
-        else if (control)
-        {
-            if (!selectedDates.Add(date)) selectedDates.Remove(date);
-            selectionAnchor = date;
-        }
-        else
-        {
-            selectedDates.Clear();
-            selectedDates.Add(date);
-            selectionAnchor = date;
-        }
+        CalendarSelection.Apply(selectedDates, ref selectionAnchor, date, control, shift);
         UpdateCalendarSelection();
     }
 

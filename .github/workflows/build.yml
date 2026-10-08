@@ -30,6 +30,13 @@ jobs:
       - name: Test
         run: dotnet test -c Release --no-build PresenceTracker.sln
 
+      - name: Regression - calendar multi-day selection
+        run: >
+          dotnet test -c Release --no-build
+          tests/PresenceTracker.Tests/PresenceTracker.Tests.csproj
+          --filter "FullyQualifiedName~CalendarSelectionTests"
+          --logger "console;verbosity=normal"
+
       - name: Publish for installer
         run: >
           dotnet publish src/PresenceTracker/PresenceTracker.csproj
