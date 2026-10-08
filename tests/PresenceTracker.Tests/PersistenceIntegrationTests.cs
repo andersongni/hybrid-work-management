@@ -1,9 +1,6 @@
-﻿using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using PresenceTracker.Application;
 using PresenceTracker.Domain;
-using PresenceTracker.Infrastructure;
-using PresenceTracker.Persistence;
 
 namespace PresenceTracker.Tests;
 
@@ -12,13 +9,9 @@ public sealed class PersistenceIntegrationTests
     [Fact]
     public async Task MigrationSeedsDefaultsAndPersistsNetworkEventsAndBatchChanges()
     {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<TrackerDbContext>().UseSqlite(connection).Options;
-        await using var db = new TrackerDbContext(options);
-        var repository = new EfTrackerRepository(db, new LocalHolidayProvider());
-
-        await repository.InitializeAsync();
+        await using var harness = await SqliteTestHarness.CreateAsync();
+        var db = harness.Db;
+        var repository = harness.Repository;
 
         var config = await db.Settings.SingleAsync();
         Assert.Equal(40m, config.TargetPercent);
@@ -56,12 +49,8 @@ public sealed class PersistenceIntegrationTests
     [Fact]
     public async Task ManualHolidayOverridesSynchronizedValueForTheSameDate()
     {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<TrackerDbContext>().UseSqlite(connection).Options;
-        await using var db = new TrackerDbContext(options);
-        var repository = new EfTrackerRepository(db, new LocalHolidayProvider());
-        await repository.InitializeAsync();
+        await using var harness = await SqliteTestHarness.CreateAsync();
+        var repository = harness.Repository;
 
         var date = new DateOnly(2026, 9, 7);
         var original = (await repository.GetHolidaysAsync(2026)).First(h => h.Date == date && h.Scope == HolidayScope.National);
@@ -80,12 +69,9 @@ public sealed class PersistenceIntegrationTests
     [Fact]
     public async Task UpdateSettingsPersistsWifiCheckInterval()
     {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<TrackerDbContext>().UseSqlite(connection).Options;
-        await using var db = new TrackerDbContext(options);
-        var repository = new EfTrackerRepository(db, new LocalHolidayProvider());
-        await repository.InitializeAsync();
+        await using var harness = await SqliteTestHarness.CreateAsync();
+        var db = harness.Db;
+        var repository = harness.Repository;
 
         var settings = await db.Settings.AsNoTracking().SingleAsync();
         settings.WifiCheckIntervalMinutes = 15;
@@ -99,12 +85,9 @@ public sealed class PersistenceIntegrationTests
     [Fact]
     public async Task PastPlansAreClearedAndCannotBeCreated()
     {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<TrackerDbContext>().UseSqlite(connection).Options;
-        await using var db = new TrackerDbContext(options);
-        var repository = new EfTrackerRepository(db, new LocalHolidayProvider());
-        await repository.InitializeAsync();
+        await using var harness = await SqliteTestHarness.CreateAsync();
+        var db = harness.Db;
+        var repository = harness.Repository;
 
         var today = DateOnly.FromDateTime(DateTime.Today);
         var past = today.AddDays(-1);
@@ -132,4 +115,3 @@ public sealed class PersistenceIntegrationTests
         Assert.False(pastDay.Outcome.IsPlanned);
     }
 }
-
