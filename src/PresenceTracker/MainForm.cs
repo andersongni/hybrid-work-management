@@ -776,7 +776,13 @@ public sealed class MainForm : Form
         {
             if (selectedDates.Count >= 5 || action == BatchAction.RestoreDefaults)
                 await backup.CreateBackupAsync();
-            await tracker.ApplyBatchAsync(selectedDates, action);
+            var result = await tracker.ApplyBatchAsync(selectedDates, action);
+            if (result.HasSkippedPastPlans)
+            {
+                statusText.Text = result.PastPlanSkippedMessage;
+                MessageBox.Show(this, result.PastPlanSkippedMessage, "Planejar presença",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
             await RefreshMonthAsync();
         }
         catch (Exception exception)

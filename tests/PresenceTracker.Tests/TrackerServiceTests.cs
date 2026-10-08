@@ -164,12 +164,60 @@ public sealed class TrackerServiceTests
         var service = CreateService(repository);
         var date = new DateOnly(2026, 6, 1);
 
-        await service.ApplyBatchAsync([date, date, date.AddDays(1)], BatchAction.Vacation);
+        var result = await service.ApplyBatchAsync([date, date, date.AddDays(1)], BatchAction.Vacation);
 
+        Assert.Equal(2, result.AppliedCount);
+        Assert.Empty(result.SkippedPastPlanDates);
         Assert.Equal(BatchAction.Vacation, repository.LastBatchAction);
         Assert.Equal(2, repository.LastBatchDates!.Count);
         Assert.Contains(date, repository.LastBatchDates);
         Assert.Contains(date.AddDays(1), repository.LastBatchDates);
+    }
+
+    [Fact]
+    public async Task PlanPresenceSkipsPastDatesAndDoesNotCallRepositoryWhenAllArePast()
+    {
+        var repository = new FakeTrackerRepository();
+        var service = CreateService(repository);
+        var today = new DateOnly(2026, 6, 10);
+
+        var result = await service.ApplyBatchAsync(
+            [today.AddDays(-2), today.AddDays(-1)], BatchAction.PlanPresence, today: today);
+
+        Assert.Equal(0, result.AppliedCount);
+        Assert.Equal(2, result.SkippedPastPlanDates.Count);
+        Assert.Null(repository.LastBatchDates);
+        Assert.Contains("anteriores a hoje", result.PastPlanSkippedMessage);
+    }
+
+    [Fact]
+    public async Task PlanPresenceAppliesTodayAndFutureWhileReportingSkippedPastDates()
+    {
+        var repository = new FakeTrackerRepository();
+        var service = CreateService(repository);
+        var today = new DateOnly(2026, 6, 10);
+        var past = today.AddDays(-1);
+        var future = today.AddDays(2);
+
+        var result = await service.ApplyBatchAsync(
+            [past, today, future], BatchAction.PlanPresence, today: today);
+
+        Assert.Equal(2, result.AppliedCount);
+        Assert.Equal(new[] { past }, result.SkippedPastPlanDates);
+        Assert.Equal(new[] { today, future }, repository.LastBatchDates);
+        Assert.Contains("ignorado", result.PastPlanSkippedMessage);
+    }
+
+    [Theory]
+    [InlineData(1, 0, "Não é possível planejar um dia anterior a hoje")]
+    [InlineData(3, 0, "Não é possível planejar 3 dias anteriores a hoje")]
+    [InlineData(1, 2, "1 dia no passado foi ignorado")]
+    [InlineData(2, 1, "2 dias no passado foram ignorados")]
+    public void PastPlanSkippedMessageExplainsWhyPlanningWasIgnored(int skipped, int applied, string expectedFragment)
+    {
+        var message = BatchApplyResult.FormatPastPlanSkippedMessage(skipped, applied);
+        Assert.Contains(expectedFragment, message);
+        Assert.Contains("hoje e datas futuras", message);
     }
 
     [Fact]

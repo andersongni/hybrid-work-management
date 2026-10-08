@@ -15,6 +15,30 @@ public sealed record DayViewData(DayOutcome Outcome, IReadOnlyList<AttendanceEve
 
 public sealed record MonthViewData(TrackerMonthData Data, MonthMetrics Metrics, IReadOnlyList<DayViewData> Days);
 
+public sealed record BatchApplyResult(int AppliedCount, IReadOnlyList<DateOnly> SkippedPastPlanDates)
+{
+    public bool HasSkippedPastPlans => SkippedPastPlanDates.Count > 0;
+
+    public static string FormatPastPlanSkippedMessage(int skippedCount, int appliedCount)
+    {
+        if (skippedCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(skippedCount));
+
+        if (appliedCount == 0)
+        {
+            return skippedCount == 1
+                ? "Não é possível planejar um dia anterior a hoje. O planejamento vale apenas para hoje e datas futuras."
+                : $"Não é possível planejar {skippedCount} dias anteriores a hoje. O planejamento vale apenas para hoje e datas futuras.";
+        }
+
+        return skippedCount == 1
+            ? "1 dia no passado foi ignorado porque o planejamento vale apenas para hoje e datas futuras."
+            : $"{skippedCount} dias no passado foram ignorados porque o planejamento vale apenas para hoje e datas futuras.";
+    }
+
+    public string PastPlanSkippedMessage => FormatPastPlanSkippedMessage(SkippedPastPlanDates.Count, AppliedCount);
+}
+
 public enum BatchAction
 {
     ManualPresence,
@@ -76,8 +100,25 @@ public sealed class TrackerService(ITrackerRepository repository, PresenceCalcul
         return new MonthViewData(data, metrics, days);
     }
 
-    public Task ApplyBatchAsync(IReadOnlyCollection<DateOnly> dates, BatchAction action, CancellationToken cancellationToken = default) =>
-        repository.ApplyBatchAsync(dates.Distinct().ToArray(), action, cancellationToken);
+    public async Task<BatchApplyResult> ApplyBatchAsync(IReadOnlyCollection<DateOnly> dates, BatchAction action,
+        CancellationToken cancellationToken = default, DateOnly? today = null)
+    {
+        var distinct = dates.Distinct().OrderBy(date => date).ToArray();
+        IReadOnlyList<DateOnly> skippedPastPlans = [];
+        var toApply = distinct;
+
+        if (action == BatchAction.PlanPresence)
+        {
+            var currentDay = today ?? DateOnly.FromDateTime(DateTime.Today);
+            skippedPastPlans = distinct.Where(date => date < currentDay).ToArray();
+            toApply = distinct.Where(date => date >= currentDay).ToArray();
+        }
+
+        if (toApply.Length > 0)
+            await repository.ApplyBatchAsync(toApply, action, cancellationToken);
+
+        return new BatchApplyResult(toApply.Length, skippedPastPlans);
+    }
 
     public Task SetAttendanceStatusAsync(long id, AttendanceStatus status, CancellationToken cancellationToken = default) =>
         repository.SetAttendanceStatusAsync(id, status, cancellationToken);
