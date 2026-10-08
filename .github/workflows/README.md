@@ -9,4 +9,6 @@ O arquivo `build.yml` é responsável por:
 - Construir e testar o projeto
 - Publicar o binário self-contained usado pelo setup
 - Compilar o instalador gráfico com Inno Setup (`PresenceTracker-Setup.exe`)
-- Fazer upload do instalador como único artefato do Actions
+- Publicar o instalador como asset da release `Latest` (download direto do `.exe`, sem ZIP)
+
+O download fica em: https://github.com/andersongni/presence-tracker/releases/latest

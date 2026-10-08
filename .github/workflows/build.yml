@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -54,9 +54,14 @@ jobs:
           & $iscc installer/PresenceTracker.iss
           if ($LASTEXITCODE -ne 0) { throw "Falha ao compilar o instalador (código $LASTEXITCODE)." }
 
-      - name: Upload Installer
-        uses: actions/upload-artifact@v6
+      - name: Publish installer to GitHub Releases
+        uses: ncipollo/release-action@v1
         with:
-          name: PresenceTracker-Installer
-          path: artifacts/installer/PresenceTracker-Setup.exe
-          if-no-files-found: error
+          tag: latest
+          name: Latest
+          body: Instalador gerado automaticamente a partir de main.
+          artifacts: artifacts/installer/PresenceTracker-Setup.exe
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          omitBodyDuringUpdate: true

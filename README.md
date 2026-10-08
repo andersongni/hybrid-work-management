@@ -2,6 +2,8 @@
 
 Repositório: [andersongni/presence-tracker](https://github.com/andersongni/presence-tracker)
 
+Instalador: [PresenceTracker-Setup.exe](https://github.com/andersongni/presence-tracker/releases/latest/download/PresenceTracker-Setup.exe) (release `Latest` gerada pelo CI)
+
 Aplicativo desktop para Windows que ajuda a controlar presença em home office ou ambiente corporativo com base em redes Wi‑Fi e em regras de calendário, metas e exceções.
 
 O projeto foi pensado para funcionar localmente no computador do usuário: os dados ficam no próprio Windows, as redes monitoradas são definidas manualmente e a sincronização de feriados é opcional e usa a internet apenas para complementar o calendário.
