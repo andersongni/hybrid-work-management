@@ -34,6 +34,7 @@ internal static class Program
         builder.Services.AddScoped<ITrackerRepository, EfTrackerRepository>();
         builder.Services.AddScoped<TrackerService>();
         builder.Services.AddSingleton<WlanMonitor>();
+        builder.Services.AddSingleton<IBackupPaths, AppDataBackupPaths>();
         builder.Services.AddSingleton<IDatabaseBackupService, SqliteBackupService>();
         builder.Services.AddHostedService<BackupScheduler>();
         builder.Services.AddScoped<MainForm>();

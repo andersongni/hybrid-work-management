@@ -11,19 +11,20 @@ public interface IDatabaseBackupService
     Task<string?> RestoreBackupAsync(string backupPath, CancellationToken cancellationToken = default);
 }
 
-public sealed class SqliteBackupService(ILogger<SqliteBackupService> logger) : IDatabaseBackupService
+public sealed class SqliteBackupService(ILogger<SqliteBackupService> logger, IBackupPaths paths) : IDatabaseBackupService
 {
     public async Task<string?> CreateBackupAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(AppDataPaths.Database)) return null;
-        AppDataPaths.EnsureDirectories();
+        if (!File.Exists(paths.Database)) return null;
+        paths.EnsureDirectories();
         try
         {
             var (backupDirectory, retention, _) = await ReadBackupSettingsAsync(cancellationToken);
             Directory.CreateDirectory(backupDirectory);
             var filename = $"presence-{DateTime.Now:yyyyMMdd-HHmmss-fff}.ptbackup";
             var destination = Path.Combine(backupDirectory, filename);
-            await CopyDatabaseAsync(AppDataPaths.Database, destination, cancellationToken);
+            await CopyDatabaseAsync(paths.Database, destination, cancellationToken);
+            SqliteConnection.ClearAllPools();
 
             var oldFiles = new DirectoryInfo(backupDirectory).GetFiles("presence-*")
                 .OrderByDescending(file => file.CreationTimeUtc)
@@ -42,7 +43,7 @@ public sealed class SqliteBackupService(ILogger<SqliteBackupService> logger) : I
 
     public async Task<string?> CreateBackupIfDueAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(AppDataPaths.Database)) return null;
+        if (!File.Exists(paths.Database)) return null;
         var (backupDirectory, _, intervalHours) = await ReadBackupSettingsAsync(cancellationToken);
         if (intervalHours is < 1 or > 720) return null;
         Directory.CreateDirectory(backupDirectory);
@@ -57,14 +58,15 @@ public sealed class SqliteBackupService(ILogger<SqliteBackupService> logger) : I
     public async Task<string?> RestoreBackupAsync(string backupPath, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(backupPath)) throw new FileNotFoundException("O arquivo de backup não foi encontrado.", backupPath);
-        if (string.Equals(Path.GetFullPath(backupPath), Path.GetFullPath(AppDataPaths.Database), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(Path.GetFullPath(backupPath), Path.GetFullPath(paths.Database), StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Escolha um arquivo de backup, não o banco de dados em uso.");
 
         try
         {
             await ValidateBackupAsync(backupPath, cancellationToken);
             var safetyBackup = await CreateBackupAsync(cancellationToken);
-            await CopyDatabaseAsync(backupPath, AppDataPaths.Database, cancellationToken);
+            await CopyDatabaseAsync(backupPath, paths.Database, cancellationToken);
+            SqliteConnection.ClearAllPools();
             logger.LogInformation("Backup Presence Tracker restaurado de {BackupPath}; segurança em {SafetyBackupPath}.", backupPath, safetyBackup);
             return safetyBackup;
         }
@@ -75,41 +77,52 @@ public sealed class SqliteBackupService(ILogger<SqliteBackupService> logger) : I
         }
     }
 
-    private static async Task<(string Directory, int Retention, int IntervalHours)> ReadBackupSettingsAsync(CancellationToken cancellationToken)
+    private async Task<(string Directory, int Retention, int IntervalHours)> ReadBackupSettingsAsync(CancellationToken cancellationToken)
     {
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = AppDataPaths.Database, Mode = SqliteOpenMode.ReadOnly
+            DataSource = paths.Database, Mode = SqliteOpenMode.ReadOnly
         }.ToString());
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT BackupFolder, BackupRetentionCount, BackupIntervalHours FROM Settings WHERE Id = 1";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return (AppDataPaths.Backups, 30, 24);
+        if (!await reader.ReadAsync(cancellationToken)) return (paths.DefaultBackupDirectory, 30, 24);
         var directory = reader.IsDBNull(0) ? "" : reader.GetString(0);
         var retention = reader.IsDBNull(1) ? 30 : reader.GetInt32(1);
         var intervalHours = reader.IsDBNull(2) ? 24 : reader.GetInt32(2);
-        return (string.IsNullOrWhiteSpace(directory) ? AppDataPaths.Backups : Path.GetFullPath(directory), retention, intervalHours);
+        return (string.IsNullOrWhiteSpace(directory) ? paths.DefaultBackupDirectory : Path.GetFullPath(directory), retention, intervalHours);
     }
 
     private static async Task ValidateBackupAsync(string backupPath, CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        try
         {
-            DataSource = backupPath, Mode = SqliteOpenMode.ReadOnly
-        }.ToString());
-        await connection.OpenAsync(cancellationToken);
-        await using var integrity = connection.CreateCommand();
-        integrity.CommandText = "PRAGMA integrity_check";
-        var result = Convert.ToString(await integrity.ExecuteScalarAsync(cancellationToken));
-        if (!string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("O arquivo selecionado está corrompido ou não é um banco SQLite válido.");
+            await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = backupPath, Mode = SqliteOpenMode.ReadOnly
+            }.ToString());
+            await connection.OpenAsync(cancellationToken);
+            await using var integrity = connection.CreateCommand();
+            integrity.CommandText = "PRAGMA integrity_check";
+            var result = Convert.ToString(await integrity.ExecuteScalarAsync(cancellationToken));
+            if (!string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("O arquivo selecionado está corrompido ou não é um banco SQLite válido.");
 
-        await using var tables = connection.CreateCommand();
-        tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('Settings', 'PresenceNetworks', 'AttendanceEvents', 'NetworkEvents', 'Plans', 'Holidays', 'Classifications', 'MonthlySnapshots')";
-        var count = Convert.ToInt32(await tables.ExecuteScalarAsync(cancellationToken));
-        if (count != 8)
-            throw new InvalidDataException("O arquivo não contém todos os dados de um backup do Presence Tracker.");
+            await using var tables = connection.CreateCommand();
+            tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('Settings', 'PresenceNetworks', 'AttendanceEvents', 'NetworkEvents', 'Plans', 'Holidays', 'Classifications', 'MonthlySnapshots')";
+            var count = Convert.ToInt32(await tables.ExecuteScalarAsync(cancellationToken));
+            if (count != 8)
+                throw new InvalidDataException("O arquivo não contém todos os dados de um backup do Presence Tracker.");
+        }
+        catch (SqliteException exception)
+        {
+            throw new InvalidDataException("O arquivo selecionado está corrompido ou não é um banco SQLite válido.", exception);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+        }
     }
 
     private static Task CopyDatabaseAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken) =>
@@ -128,6 +141,3 @@ public sealed class SqliteBackupService(ILogger<SqliteBackupService> logger) : I
             source.BackupDatabase(target);
         }, cancellationToken);
 }
-
-
-

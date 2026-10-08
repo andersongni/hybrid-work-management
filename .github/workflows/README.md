@@ -8,6 +8,7 @@ O arquivo `build.yml` é responsável por:
 
 - Construir e testar o projeto
 - Rodar regressão de seleção multi-dia do calendário (`CalendarSelectionTests`)
+- Rodar regressão de backup/restore (`SqliteBackupServiceTests`)
 - Publicar o binário self-contained usado pelo setup
 - Compilar o instalador gráfico com Inno Setup (`PresenceTracker-Setup.exe`)
 - Publicar o instalador como asset da release `Latest` (download direto do `.exe`, sem ZIP)
