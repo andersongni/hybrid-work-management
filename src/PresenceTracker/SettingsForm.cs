@@ -518,7 +518,7 @@ internal sealed class SettingsForm : Form
 
     private async Task RestoreBackupAsync(IDatabaseBackupService backup)
     {
-        var backupPath = await ShowBackupFileDialogOnStaThreadAsync();
+        var backupPath = await ShowBackupFileDialogOnStaThreadAsync(GetBackupDirectory());
         if (backupPath is null || IsDisposed) return;
         var confirmation = MessageBox.Show(this,
             "A restauração substituirá as configurações e o histórico atuais pelos dados do arquivo selecionado. Um backup de segurança do estado atual será criado antes da importação. Continuar?",
@@ -584,17 +584,19 @@ internal sealed class SettingsForm : Form
         }
     }
 
-    private static Task<string?> ShowBackupFileDialogOnStaThreadAsync()
+    private static Task<string?> ShowBackupFileDialogOnStaThreadAsync(string initialDirectory)
     {
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
+                Directory.CreateDirectory(initialDirectory);
                 using var dialog = new OpenFileDialog
                 {
                     Title = "Restaurar backup do Presence Tracker",
                     Filter = "Backups Presence Tracker (*.ptbackup;*.db)|*.ptbackup;*.db|Todos os arquivos (*.*)|*.*",
+                    InitialDirectory = initialDirectory,
                     CheckFileExists = true,
                     Multiselect = false
                 };
